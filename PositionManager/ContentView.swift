@@ -13,14 +13,13 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            StrategyInfoView()
+            MyStrategyView()
                 .tabItem {
-                    Label("Strategy Info", systemImage: "chart.line.uptrend.xyaxis")
+                    Label("My Strategy", systemImage: "chart.line.uptrend.xyaxis")
                 }
                 .tag(0)
             
-            // 未来可以添加更多页面
-            PlaceholderView(title: "Portfolio")
+            PortfolioView()
                 .tabItem {
                     Label("Portfolio", systemImage: "briefcase")
                 }
@@ -35,16 +34,16 @@ struct ContentView: View {
     }
 }
 
-// 占位视图，用于未来的页面
+// Placeholder view for future pages
 struct PlaceholderView: View {
     let title: String
     
     var body: some View {
         NavigationStack {
             ContentUnavailableView(
-                "即将推出",
+                "Coming Soon",
                 systemImage: "hammer",
-                description: Text("\(title) 功能正在开发中")
+                description: Text("\(title) feature is under development")
             )
             .navigationTitle(title)
         }

@@ -42,21 +42,26 @@ final class OptionStrategy {
     }
 }
 
-// 期权类型
+// Option Type
 enum OptionType: String, Codable, CaseIterable {
     case call = "Call"
     case put = "Put"
     
     var displayName: String {
-        self.rawValue
+        switch self {
+        case .call:
+            return "Sell Call"
+        case .put:
+            return "Sell Put"
+        }
     }
 }
 
-// 行权状态
+// Exercise Status
 enum ExerciseStatus: String, Codable, CaseIterable {
-    case yes = "是"
-    case no = "否"
-    case unknown = "未知"
+    case yes = "Yes"
+    case no = "No"
+    case unknown = "Unknown"
     
     var displayName: String {
         self.rawValue
