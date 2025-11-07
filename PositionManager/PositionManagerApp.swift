@@ -64,7 +64,7 @@ struct PositionManagerApp: App {
         // AAPL 策略 - 不同日期
         let aapl1 = OptionStrategy(
             symbol: "AAPL",
-            optionType: .call,
+            optionType: .coveredCall,
             expirationDate: nextWeek,
             strikePrice: 180.0,
             optionPrice: 5.50,
@@ -75,7 +75,7 @@ struct PositionManagerApp: App {
         
         let aapl2 = OptionStrategy(
             symbol: "AAPL",
-            optionType: .put,
+            optionType: .cashSecuredPut,
             expirationDate: oneMonth,
             strikePrice: 165.0,
             optionPrice: 4.25,
@@ -86,7 +86,7 @@ struct PositionManagerApp: App {
         
         let aapl3 = OptionStrategy(
             symbol: "AAPL",
-            optionType: .call,
+            optionType: .nakedCall,
             expirationDate: twoMonths,
             strikePrice: 185.0,
             optionPrice: 6.00,
@@ -98,7 +98,7 @@ struct PositionManagerApp: App {
         // TSLA 策略
         let tsla1 = OptionStrategy(
             symbol: "TSLA",
-            optionType: .call,
+            optionType: .coveredCall,
             expirationDate: nextWeek,
             strikePrice: 250.0,
             optionPrice: 12.50,
@@ -109,7 +109,7 @@ struct PositionManagerApp: App {
         
         let tsla2 = OptionStrategy(
             symbol: "TSLA",
-            optionType: .put,
+            optionType: .cashSecuredPut,
             expirationDate: twoWeeks,
             strikePrice: 230.0,
             optionPrice: 10.00,
@@ -121,7 +121,7 @@ struct PositionManagerApp: App {
         // MSFT 策略
         let msft1 = OptionStrategy(
             symbol: "MSFT",
-            optionType: .call,
+            optionType: .coveredCall,
             expirationDate: twoWeeks,
             strikePrice: 380.0,
             optionPrice: 8.75,
@@ -132,7 +132,7 @@ struct PositionManagerApp: App {
         
         let msft2 = OptionStrategy(
             symbol: "MSFT",
-            optionType: .put,
+            optionType: .cashSecuredPut,
             expirationDate: oneMonth,
             strikePrice: 360.0,
             optionPrice: 7.50,
@@ -144,7 +144,7 @@ struct PositionManagerApp: App {
         // NVDA 策略
         let nvda1 = OptionStrategy(
             symbol: "NVDA",
-            optionType: .call,
+            optionType: .nakedCall,
             expirationDate: oneMonth,
             strikePrice: 500.0,
             optionPrice: 25.00,
@@ -155,7 +155,7 @@ struct PositionManagerApp: App {
         
         let nvda2 = OptionStrategy(
             symbol: "NVDA",
-            optionType: .call,
+            optionType: .nakedCall,
             expirationDate: twoMonths,
             strikePrice: 520.0,
             optionPrice: 28.50,
@@ -167,7 +167,7 @@ struct PositionManagerApp: App {
         // GOOGL 策略
         let googl1 = OptionStrategy(
             symbol: "GOOGL",
-            optionType: .put,
+            optionType: .cashSecuredPut,
             expirationDate: nextWeek,
             strikePrice: 140.0,
             optionPrice: 4.50,
@@ -178,7 +178,7 @@ struct PositionManagerApp: App {
         
         let googl2 = OptionStrategy(
             symbol: "GOOGL",
-            optionType: .call,
+            optionType: .coveredCall,
             expirationDate: twoWeeks,
             strikePrice: 150.0,
             optionPrice: 5.25,
@@ -190,7 +190,7 @@ struct PositionManagerApp: App {
         // META 策略
         let meta1 = OptionStrategy(
             symbol: "META",
-            optionType: .call,
+            optionType: .nakedCall,
             expirationDate: twoWeeks,
             strikePrice: 480.0,
             optionPrice: 18.00,

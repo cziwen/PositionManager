@@ -58,7 +58,6 @@ struct AnalyticsView: View {
                     Text("More analysis tools coming in future updates")
                 }
             }
-            .navigationTitle("Analytics")
         }
     }
 }

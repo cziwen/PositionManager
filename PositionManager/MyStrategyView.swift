@@ -350,27 +350,27 @@ struct StrategyCard: View {
             VStack(spacing: 0) {
                 // 第一行
                 HStack(spacing: 0) {
-                    InfoCell(title: "Expiration", value: formattedDate(strategy.expirationDate))
+                    StrategyInfoCell(title: "Expiration", value: formattedDate(strategy.expirationDate))
                     Divider()
-                    InfoCell(title: "Strike Price", value: formatPrice(strategy.strikePrice))
+                    StrategyInfoCell(title: "Strike Price", value: formatPrice(strategy.strikePrice))
                 }
                 
                 Divider()
                 
                 // 第二行
                 HStack(spacing: 0) {
-                    InfoCell(title: "Premium", value: formatPrice(strategy.optionPrice))
+                    StrategyInfoCell(title: "Premium", value: formatPrice(strategy.optionPrice))
                     Divider()
-                    InfoCell(title: "Avg Price", value: formatPrice(strategy.averagePricePerShare))
+                    StrategyInfoCell(title: "Avg Price", value: formatPrice(strategy.averagePricePerShare))
                 }
                 
                 Divider()
                 
                 // 第三行
                 HStack(spacing: 0) {
-                    InfoCell(title: "Contracts", value: "\(strategy.contracts)")
+                    StrategyInfoCell(title: "Contracts", value: "\(strategy.contracts)")
                     Divider()
-                    InfoCell(title: "Total Value", value: formatPrice(strategy.optionPrice * Double(strategy.contracts) * 100))
+                    StrategyInfoCell(title: "Total Value", value: formatPrice(strategy.optionPrice * Double(strategy.contracts) * 100))
                 }
             }
         }
@@ -409,8 +409,8 @@ struct StrategyCard: View {
     }
 }
 
-// MARK: - Info Cell Component
-struct InfoCell: View {
+// MARK: - Strategy Info Cell Component
+struct StrategyInfoCell: View {
     let title: String
     let value: String
     

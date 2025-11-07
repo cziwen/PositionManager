@@ -348,14 +348,12 @@ struct RollCalculator {
     // Call: 股票在旧的 strike 被卖出
     // Put: 股票在旧的 strike 被买入
     var exercisedProfitLoss: Double {
-        switch strategy.optionType {
-        case .call:
-            // Covered Call 被行权：股票在 old strike 卖出
+        if strategy.optionType.isCall {
+            // Covered Call 或 Naked Call 被行权：股票在 old strike 卖出
             // 收益 = (old strike - avg cost) * shares + total premium
             return (strategy.strikePrice - strategy.averagePricePerShare) * totalShares + totalPremium
-            
-        case .put:
-            // Cash-Secured Put 被行权：股票在 old strike 买入
+        } else {
+            // Cash-Secured Put 或 Naked Put 被行权：股票在 old strike 买入
             // 成本 = old strike * shares
             // 如果之后在 new strike 卖出
             // 收益 = (new strike - old strike) * shares + total premium
@@ -366,12 +364,11 @@ struct RollCalculator {
     // 情况1的收益率
     var exercisedReturn: Double {
         let costBasis: Double
-        switch strategy.optionType {
-        case .call:
-            // Covered Call: 成本是原始股票成本
+        if strategy.optionType.isCall {
+            // Covered Call / Naked Call: 成本是原始股票成本
             costBasis = strategy.averagePricePerShare * totalShares
-        case .put:
-            // Cash-Secured Put: 成本是行权时的买入成本
+        } else {
+            // Cash-Secured Put / Naked Put: 成本是行权时的买入成本
             costBasis = strategy.strikePrice * totalShares
         }
         
@@ -383,15 +380,13 @@ struct RollCalculator {
     // Call: 股票仍持有，可能在新的 strike 被卖出
     // Put: 股票未被 put，现在卖新的 call
     var notExercisedProfitLoss: Double {
-        switch strategy.optionType {
-        case .call:
-            // Covered Call 未被行权：股票仍持有
+        if strategy.optionType.isCall {
+            // Covered Call / Naked Call 未被行权：股票仍持有
             // 如果在 new strike 卖出
             // 收益 = (new strike - avg cost) * shares + total premium
             return (newStrike - strategy.averagePricePerShare) * totalShares + totalPremium
-            
-        case .put:
-            // Cash-Secured Put 未被行权：没有买入股票
+        } else {
+            // Cash-Secured Put / Naked Put 未被行权：没有买入股票
             // 现在卖 Call，假设在当前价格买入再在 new strike 卖出
             // 收益 = (new strike - current price) * shares + total premium
             return (newStrike - currentPrice) * totalShares + totalPremium
@@ -401,12 +396,11 @@ struct RollCalculator {
     // 情况2的收益率
     var notExercisedReturn: Double {
         let costBasis: Double
-        switch strategy.optionType {
-        case .call:
-            // Covered Call 未行权：成本仍是原始股票成本
+        if strategy.optionType.isCall {
+            // Covered Call / Naked Call 未行权：成本仍是原始股票成本
             costBasis = strategy.averagePricePerShare * totalShares
-        case .put:
-            // Cash-Secured Put 未行权：假设现在买入的成本
+        } else {
+            // Cash-Secured Put / Naked Put 未行权：假设现在买入的成本
             costBasis = currentPrice * totalShares
         }
         
