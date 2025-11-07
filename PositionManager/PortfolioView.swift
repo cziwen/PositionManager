@@ -92,40 +92,52 @@ struct PortfolioView: View {
             let cashWhenDue = symbolStrategies.reduce(0.0) { sum, strategy in
                 let quantity = Double(strategy.contracts) * 100
                 let strikeValue = strategy.strikePrice * quantity
+                let premium = strategy.optionPrice * quantity
                 
                 switch strategy.exerciseStatus {
                 case .yes:
                     // 被行权：实际发生的现金流
                     switch strategy.optionType {
                     case .coveredCall:
-                        // Covered Call 被行权：收到执行价
-                        // Cash = Strike Price × Quantity
-                        return sum + strikeValue
+                        // Covered Call 被行权：收到执行价 + 权利金
+                        return sum + strikeValue + premium
                         
                     case .cashSecuredPut:
-                        // Cash-Secured Put 被行权：支付执行价
-                        // Cash = -Strike Price × Quantity（支出）
-                        return sum - strikeValue
+                        // Cash-Secured Put 被行权：只收到权利金
+                        // Cash When Due = Premium
+                        return sum + premium
                         
                     case .nakedCall:
                         // Naked Call 被行权：使用实际市场价格计算
                         if let marketPrice = strategy.exerciseMarketPrice {
-                            // Cash = -Market Price × Quantity（需要以市价买入股票）
-                            return sum - (marketPrice * quantity)
+                            // Cash = Premium - Market Price × Quantity
+                            return sum + premium - (marketPrice * quantity)
                         } else {
-                            // 没有输入市场价格，无法计算
-                            return sum
+                            // 没有输入市场价格，只计算权利金
+                            return sum + premium
                         }
                         
                     case .nakedPut:
-                        // Naked Put 被行权：支付执行价
-                        // Cash = -Strike Price × Quantity（需要买入）
-                        return sum - strikeValue
+                        // Naked Put 被行权：支付执行价，但收到权利金
+                        return sum + premium - strikeValue
                     }
                     
                 case .no:
-                    // 未被行权：没有额外的现金流（只有之前收到的权利金）
-                    return sum
+                    // 未被行权：现金流处理
+                    switch strategy.optionType {
+                    case .coveredCall:
+                        // Covered Call 未行权：只收到权利金
+                        return sum + premium
+                        
+                    case .cashSecuredPut:
+                        // Cash-Secured Put 未行权：收回投资 + 权利金
+                        // Cash When Due = Investment + Premium
+                        return sum + strikeValue + premium
+                        
+                    case .nakedCall, .nakedPut:
+                        // 其他类型未行权：只保留权利金
+                        return sum + premium
+                    }
                     
                 case .unknown:
                     // 不确定：不计算
@@ -133,8 +145,8 @@ struct PortfolioView: View {
                 }
             }
             
-            // 加上权利金收入（所有策略都会收到权利金）
-            let totalCashWhenDue = cashWhenDue + totalPremium
+            // 总现金流就是 cashWhenDue（已经包含了权利金）
+            let totalCashWhenDue = cashWhenDue
             
             // 计算盈亏（需要考虑未行权时的股票未实现盈亏）
             let profitLoss = symbolStrategies.reduce(0.0) { sum, strategy in
@@ -152,9 +164,17 @@ struct PortfolioView: View {
                         return sum + (strikeValue + premium - stockCost)
                         
                     case .cashSecuredPut:
-                        let strikeValue = strategy.strikePrice * quantity
-                        // P/L = Premium - Strike Value（最大亏损）
-                        return sum + (premium - strikeValue)
+                        // Cash-Secured Put 被行权：
+                        // P/L = Market Price - Strike Price + Premium
+                        if let marketPrice = strategy.exerciseMarketPrice {
+                            let marketValue = marketPrice * quantity
+                            let strikeValue = strategy.strikePrice * quantity
+                            // P/L = (Market Price - Strike Price) × Quantity + Premium
+                            return sum + ((marketValue - strikeValue) + premium)
+                        } else {
+                            // 没有市场价格，无法准确计算，只计算权利金
+                            return sum + premium
+                        }
                         
                     case .nakedCall:
                         if let marketPrice = strategy.exerciseMarketPrice {
@@ -188,7 +208,12 @@ struct PortfolioView: View {
                             return sum + premium
                         }
                         
-                    case .cashSecuredPut, .nakedCall, .nakedPut:
+                    case .cashSecuredPut:
+                        // Cash-Secured Put 未行权：
+                        // P/L = Premium
+                        return sum + premium
+                        
+                    case .nakedCall, .nakedPut:
                         // 其他类型未行权：只保留权利金
                         return sum + premium
                     }

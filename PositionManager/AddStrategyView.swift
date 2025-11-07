@@ -168,11 +168,36 @@ struct AddStrategyView: View {
                             }
                             
                             if currentMarketPrice.isEmpty {
-                                Text("⚠️ Required: Enter current market price for accurate P/L calculation")
+                                Text("Required: Enter current market price for P/L calculation")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             } else {
                                 Text("Current market price for calculating unrealized gains/losses")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    
+                    // Cash-Secured Put 被行权时（Yes），需要输入市场价格
+                    if optionType == .cashSecuredPut && exerciseStatus == .yes {
+                        VStack(alignment: .leading, spacing: 4) {
+                            TextField("Market Price at Exercise (Required)", text: $exerciseMarketPrice)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .exerciseMarketPrice)
+                            
+                            if !exerciseMarketPrice.isEmpty && !exerciseMarketPrice.isValidPositiveNumber {
+                                Text("Please enter a valid positive number")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                            
+                            if exerciseMarketPrice.isEmpty {
+                                Text("Required: Enter market price at exercise for P/L calculation")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            } else {
+                                Text("Market price when put was exercised (P/L = Market Price - Strike Price + Premium)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -341,6 +366,11 @@ struct AddStrategyView: View {
             return basicValid && avgPriceValid
         }
         
+        // Cash-Secured Put 被行权时（Yes），需要验证市场价格
+        if optionType == .cashSecuredPut && exerciseStatus == .yes {
+            return basicValid && exerciseMarketPrice.isValidPositiveNumber
+        }
+        
         // 其他策略类型不需要均价
         return basicValid
     }
@@ -390,11 +420,16 @@ struct AddStrategyView: View {
             marginCostValue = nil
         }
         
-        // 处理行权市场价格（仅用于 Naked Call/Put 且状态为 Yes）
+        // 处理行权市场价格
         let exerciseMarketPriceValue: Double?
-        if (optionType == .nakedCall || optionType == .nakedPut) && exerciseStatus == .yes {
-            if !exerciseMarketPrice.isEmpty, let value = Double(exerciseMarketPrice) {
-                exerciseMarketPriceValue = value
+        if exerciseStatus == .yes {
+            // 被行权时需要市场价格的策略类型：Cash-Secured Put, Naked Call, Naked Put
+            if optionType == .cashSecuredPut || optionType == .nakedCall || optionType == .nakedPut {
+                if !exerciseMarketPrice.isEmpty, let value = Double(exerciseMarketPrice) {
+                    exerciseMarketPriceValue = value
+                } else {
+                    exerciseMarketPriceValue = nil
+                }
             } else {
                 exerciseMarketPriceValue = nil
             }
