@@ -430,79 +430,73 @@ struct PayoffDiagramView: View {
     
     // MARK: - Helper Methods
     
-    /// 计算最大利润
+    /// Calculate max profit from the payoff curve
     private func calculateMaxProfit() -> (value: Double, isUnlimited: Bool) {
-        // 对于卖出策略，最大利润通常是有限的（收取的权利金）
+        let hasNakedCall = strategies.contains { $0.optionType == .nakedCall }
+        
+        if hasNakedCall && strategies.count == 1 {
+            return (0, true)  // Unlimited profit potential for naked call
+        }
+        
         let maxProfit = payoffData.total.points.map { $0.profit }.max() ?? 0
         return (maxProfit, false)
     }
     
-    /// 计算最大亏损
+    /// Calculate max loss from the payoff curve
     private func calculateMaxLoss() -> (value: Double, isUnlimited: Bool) {
-        // 只有 Naked Call 有真正的无限风险（股价可以无限上涨）
+        // Check if any strategy has unlimited risk
         let hasNakedCall = strategies.contains { $0.optionType == .nakedCall }
         
+        // For combinations with naked calls, check if it's truly unlimited
         if hasNakedCall {
-            return (0, true)  // 无限风险
-        }
-        
-        // 计算其他策略的真实最大亏损
-        var totalMaxLoss: Double = 0
-        
-        for strategy in strategies {
-            let premium = strategy.optionPrice * Double(strategy.contracts) * 100
-            let quantity = Double(strategy.contracts) * 100
-            
-            switch strategy.optionType {
-            case .coveredCall:
-                // Covered Call 最大亏损 = 股票成本 - 权利金
-                // 当股价跌到 $0 时
-                let stockCost = strategy.averagePricePerShare * quantity
-                let maxLoss = -(stockCost - premium)
-                totalMaxLoss += maxLoss
-                
-            case .cashSecuredPut:
-                // Cash-Secured Put 最大亏损 = 执行价（collateral）- 权利金
-                // 当股价跌到 $0 时，需要以执行价买入
-                let collateral = strategy.strikePrice * quantity
-                let maxLoss = -(collateral - premium)
-                totalMaxLoss += maxLoss
-                
-            case .nakedPut:
-                // Naked Put 最大亏损 = 执行价 - 权利金
-                // 当股价跌到 $0 时
-                let maxLoss = -(strategy.strikePrice * quantity - premium)
-                totalMaxLoss += maxLoss
-                
-            case .nakedCall:
-                // 不应该到这里（上面已经处理）
-                break
+            // If it's a pure naked call position, unlimited risk
+            if strategies.count == 1 && strategies[0].optionType == .nakedCall {
+                return (0, true)
             }
+            // For spreads or combinations, calculate actual max loss from curve
         }
         
-        return (totalMaxLoss, false)
+        // For all other cases, use the minimum value from the payoff curve
+        let minProfit = payoffData.total.points.map { $0.profit }.min() ?? 0
+        return (minProfit, false)
     }
     
+    /// Find break-even points where profit crosses zero
     private func findBreakEvenPoints() -> [Double] {
         var breakEvenPoints: [Double] = []
         let points = payoffData.total.points
+        
+        guard points.count >= 2 else { return [] }
         
         for i in 0..<(points.count - 1) {
             let current = points[i]
             let next = points[i + 1]
             
-            // 检查是否跨越零点
-            if (current.profit <= 0 && next.profit >= 0) || (current.profit >= 0 && next.profit <= 0) {
-                // 线性插值找到精确的盈亏平衡点
-                if next.profit - current.profit != 0 {
-                    let ratio = -current.profit / (next.profit - current.profit)
-                    let breakEven = current.underlyingPrice + ratio * (next.underlyingPrice - current.underlyingPrice)
+            // Check if profit crosses zero between these two points
+            if (current.profit < 0 && next.profit > 0) || (current.profit > 0 && next.profit < 0) {
+                // Use linear interpolation to find exact break-even point
+                let profitDiff = next.profit - current.profit
+                if abs(profitDiff) > 0.001 {  // Avoid division by very small numbers
+                    let ratio = -current.profit / profitDiff
+                    let priceDiff = next.underlyingPrice - current.underlyingPrice
+                    let breakEven = current.underlyingPrice + ratio * priceDiff
                     breakEvenPoints.append(breakEven)
                 }
+            } else if abs(current.profit) < 0.01 {
+                // If very close to zero, treat as break-even
+                breakEvenPoints.append(current.underlyingPrice)
             }
         }
         
-        return breakEvenPoints
+        // Remove duplicates (break-even points within $0.50 of each other)
+        var uniquePoints: [Double] = []
+        for point in breakEvenPoints.sorted() {
+            if uniquePoints.isEmpty || abs(point - uniquePoints.last!) > 0.5 {
+                uniquePoints.append(point)
+            }
+        }
+        
+        return uniquePoints
     }
     
     private func formatPrice(_ price: Double) -> String {

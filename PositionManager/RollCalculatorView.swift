@@ -2,471 +2,841 @@
 //  RollCalculatorView.swift
 //  PositionManager
 //
-//  Created by Ziwen Chen on 11/5/25.
-//  Updated by Ziwen Chen on 11/8/25.
+//  Created by Ziwen Chen on 11/9/25.
 //
 
 import SwiftUI
 import SwiftData
+import Charts
 
+// MARK: - Roll Calculator View
 struct RollCalculatorView: View {
+    @Query private var allStrategies: [OptionStrategy]
     @Environment(\.modelContext) private var modelContext
-    @Query private var strategies: [OptionStrategy]
     
-    // 输入参数
-    @State private var selectedStrategy: OptionStrategy?
-    @State private var oldLegEndMode: OldLegEndMode = .expired
-    @State private var closePrice: String = ""
-    @State private var marketPriceAtExercise: String = ""  // Naked Call/Put 被行权时的市场价
-    @State private var newStrike: String = ""
-    @State private var newPremium: String = ""
-    @State private var newOptionType: OptionType = .coveredCall
-    // ❌ 移除：不需要预期股价，Diagram 已涵盖
+    @State private var selectedOldStrategy: OptionStrategy?
+    @State private var closePrice: Double = 0.0  // 平仓价（买入平仓的成本 per share）
+    @State private var contractsToRoll: Int = 1  // 要 roll 的合约数量
     
-    // 显示选择器
-    @State private var showingStrategyPicker = false
+    @State private var newStrikePrice: Double = 0.0
+    @State private var newPremium: Double = 0.0
+    
+    @State private var selectedPrice: Double?
+    @State private var selectedProfit: Double?
+    
+    private var calculator: RollCalculator? {
+        guard let oldStrategy = selectedOldStrategy,
+              closePrice > 0,
+              contractsToRoll > 0,
+              contractsToRoll <= oldStrategy.contracts,
+              newStrikePrice > 0,
+              newPremium > 0 else {
+            return nil
+        }
+        
+        return RollCalculator(
+            oldStrategy: oldStrategy,
+            closePrice: closePrice,
+            contractsToRoll: contractsToRoll,
+            newStrikePrice: newStrikePrice,
+            newPremium: newPremium
+        )
+    }
+    
+    private var strategies: [OptionStrategy] {
+        allStrategies
+    }
     
     var body: some View {
-        NavigationStack {
-            Form {
-                // 选择历史策略
-                Section {
-                    Button {
-                        showingStrategyPicker = true
-                    } label: {
-                        HStack {
-                            Text("Select Previous Strategy")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            if let strategy = selectedStrategy {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("\(strategy.symbol)")
-                                        .foregroundStyle(.primary)
-                                    Text(strategy.optionType.displayName)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            } else {
-                                Text("None")
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
+        ScrollView {
+            VStack(spacing: 20) {
+                // 标题和说明
+                VStack(spacing: 8) {
+                    Text("Roll Calculator")
+                        .font(.title2.bold())
                     
-                    if let strategy = selectedStrategy {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Strike:")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(formatPrice(strategy.strikePrice))
-                            }
-                            HStack {
-                                Text("Premium Received:")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(formatPrice(strategy.optionPrice))
-                                    .foregroundStyle(.green)
-                            }
-                            HStack {
-                                Text("Contracts:")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text("\(strategy.contracts)")
-                            }
-                            if strategy.optionType == .coveredCall {
-                                HStack {
-                                    Text("Stock Cost Basis:")
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(formatPrice(strategy.averagePricePerShare))
-                                }
-                            }
-                        }
+                    Text("Calculate payoff when closing a position and opening a new one")
                         .font(.subheadline)
-                        .padding(.vertical, 4)
-                    }
-                } header: {
-                    Text("Previous Position")
-                } footer: {
-                    Text("Select the option strategy you want to roll from")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
+                .padding(.horizontal)
+                .padding(.top)
                 
-                // 旧仓结局选择
-                if selectedStrategy != nil {
-                    Section {
-                        Picker("Outcome", selection: $oldLegEndMode) {
-                            ForEach(OldLegEndMode.allCases) { mode in
-                                HStack {
-                                    Image(systemName: mode.icon)
-                                    Text(mode.displayName)
-                                }
-                                .tag(mode)
-                            }
-                        }
-                        .pickerStyle(.menu)
+                // 输入表单
+                VStack(spacing: 20) {
+                    // 选择旧仓位
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Old Position", systemImage: "1.circle.fill")
+                            .font(.headline)
                         
-                        Text(oldLegEndMode.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        
-                        // 如果选择了平仓，需要输入平仓价
-                        if oldLegEndMode == .closed {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("Close Price (per share)")
-                                    Spacer()
-                                    TextField("0.00", text: $closePrice)
-                                        .keyboardType(.decimalPad)
-                                        .multilineTextAlignment(.trailing)
-                                        .frame(width: 120)
-                                }
-                                
-                                if !closePrice.isEmpty && !closePrice.isValidPositiveNumber {
-                                    Text("Please enter a valid positive number")
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Select Position to Roll")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            
+                            Picker("Select Strategy", selection: $selectedOldStrategy) {
+                                Text("None").tag(nil as OptionStrategy?)
+                                ForEach(strategies) { strategy in
+                                    Text("\(strategy.symbol) \(strategy.optionType.displayName) @ $\(String(format: "%.0f", strategy.strikePrice))")
+                                        .tag(strategy as OptionStrategy?)
                                 }
                             }
-                        }
-                        
-                        // 如果是 Naked Call/Put 被行权，需要输入行权时的市场价
-                        if oldLegEndMode == .exercised,
-                           let strategy = selectedStrategy,
-                           strategy.optionType.isNaked {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("Market Price at Exercise")
-                                    Spacer()
-                                    TextField("0.00", text: $marketPriceAtExercise)
-                                        .keyboardType(.decimalPad)
-                                        .multilineTextAlignment(.trailing)
-                                        .frame(width: 120)
+                            .pickerStyle(.menu)
+                            .onChange(of: selectedOldStrategy) { oldValue, newValue in
+                                if let newStrategy = newValue {
+                                    // 当选择新策略时，默认 roll 所有合约
+                                    contractsToRoll = newStrategy.contracts
+                                } else {
+                                    // 如果没有选择策略，重置为 1
+                                    contractsToRoll = 1
                                 }
-                                
-                                Text("Stock market price when option was exercised")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                
-                                if !marketPriceAtExercise.isEmpty && !marketPriceAtExercise.isValidPositiveNumber {
-                                    Text("Please enter a valid positive number")
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("Old Position Outcome")
-                    } footer: {
-                        Text("How did your previous option position end?")
-                    }
-                }
-                
-                // 新仓输入参数
-                if selectedStrategy != nil {
-                    Section {
-                        // 选择新策略类型
-                        Picker("New Strategy Type", selection: $newOptionType) {
-                            ForEach(OptionType.allCases, id: \.self) { type in
-                                Text(type.displayName)
-                                    .tag(type)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        
-                        // 策略兼容性提示
-                        if let oldType = selectedStrategy?.optionType {
-                            strategyCompatibilityHint(oldType: oldType, newType: newOptionType)
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("New Strike")
-                                Spacer()
-                                TextField("0.00", text: $newStrike)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 120)
                             }
                             
-                            if !newStrike.isEmpty && !newStrike.isValidPositiveNumber {
-                                Text("Please enter a valid positive number")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("New Premium (per share)")
-                                Spacer()
-                                TextField("0.00", text: $newPremium)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 120)
-                            }
-                            
-                            if !newPremium.isEmpty && !newPremium.isValidPositiveNumber {
-                                Text("Please enter a valid positive number")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                    } header: {
-                        Text("New Position Parameters")
-                    } footer: {
-                        Text("Choose the type of option strategy you want to roll into")
-                    }
-                }
-                
-                // Payoff Diagram 按钮
-                if canShowDiagram() {
-                    Section {
-                        NavigationLink {
-                            if let strategy = selectedStrategy,
-                               let newStrikeValue = Double(newStrike),
-                               let newPremiumValue = Double(newPremium) {
-                                let assumption = OldLegAssumption(
-                                    endMode: oldLegEndMode,
-                                    closePrice: Double(closePrice),
-                                    marketPriceAtExercise: Double(marketPriceAtExercise),
-                                    stockPriceAtExpiration: nil
-                                )
-                                
-                                RollPayoffDiagramView(
-                                    oldStrategy: strategy,
-                                    oldAssumption: assumption,
-                                    newOptionType: newOptionType,
-                                    newStrike: newStrikeValue,
-                                    newPremium: newPremiumValue
-                                )
-                                .navigationTitle("Roll P/L Diagram")
-                                .navigationBarTitleDisplayMode(.inline)
-                            }
-                        } label: {
-                            HStack {
-                                Image(systemName: "chart.xyaxis.line")
-                                    .font(.title2)
-                                    .foregroundStyle(.white)
-                                    .frame(width: 48, height: 48)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [.blue, .blue.opacity(0.7)],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("View Payoff Diagram")
-                                        .font(.headline)
+                            if let strategy = selectedOldStrategy {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    StrategyDetailRow(label: "Symbol", value: strategy.symbol)
+                                    StrategyDetailRow(label: "Strategy", value: strategy.optionType.displayName)
+                                    StrategyDetailRow(label: "Strike", value: "$\(String(format: "%.2f", strategy.strikePrice))")
+                                    StrategyDetailRow(label: "Premium", value: "$\(String(format: "%.2f", strategy.optionPrice))")
                                     
-                                    Text("Visualize P/L at different stock prices")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                    // 根据策略类型显示不同的字段
+                                    switch strategy.optionType {
+                                    case .nakedCall, .nakedPut:
+                                        // Naked Call/Put: 显示 Margin Cost
+                                        let marginCost = strategy.getMarginCost()
+                                        StrategyDetailRow(label: "Margin Cost", value: "$\(String(format: "%.2f", marginCost))")
+                                    case .cashSecuredPut:
+                                        // Cash-Secured Put: 显示 Cost Basis per Share (strike price)
+                                        StrategyDetailRow(label: "Cost Basis per Share", value: "$\(String(format: "%.2f", strategy.strikePrice))")
+                                    case .coveredCall:
+                                        // Covered Call: 显示 Cost Basis per Share
+                                        StrategyDetailRow(label: "Cost Basis per Share", value: "$\(String(format: "%.2f", strategy.averagePricePerShare))")
+                                    }
+                                    
+                                    StrategyDetailRow(label: "Contracts", value: "\(strategy.contracts)")
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemGroupedBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(.systemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                    
+                    // 平仓信息
+                    if selectedOldStrategy != nil {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Close Position", systemImage: "xmark.circle.fill")
+                                .font(.headline)
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                RollInputRow(
+                                    title: "Close Price",
+                                    description: "Cost per share to buy-to-close the option",
+                                    value: $closePrice
+                                )
+                                
+                                if let oldStrategy = selectedOldStrategy {
+                                    Stepper(
+                                        "Contracts to Roll: \(contractsToRoll)",
+                                        value: $contractsToRoll,
+                                        in: 1...oldStrategy.contracts
+                                    )
+                                    
+                                    if contractsToRoll < oldStrategy.contracts {
+                                        Text("Note: Rolling \(contractsToRoll) of \(oldStrategy.contracts) contracts")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
                                 
-                                Spacer()
-                                
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.vertical, 6)
-                        }
-                    } header: {
-                        Text("Analysis")
-                    } footer: {
-                        Text("See how total P/L changes with different stock prices at expiration")
-                    }
-                }
-            }
-            .navigationTitle("Roll Calculator")
-            .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $showingStrategyPicker) {
-                StrategyPickerView(
-                    strategies: strategies,
-                    selectedStrategy: $selectedStrategy
-                )
-            }
-            .onChange(of: selectedStrategy) { oldValue, newValue in
-                // 当选择新策略时，自动设置默认的新策略类型为相同类型
-                if let strategy = newValue {
-                    newOptionType = strategy.optionType
-                }
-            }
-        }
-    }
-    
-    // 策略兼容性提示
-    @ViewBuilder
-    private func strategyCompatibilityHint(oldType: OptionType, newType: OptionType) -> some View {
-        let compatibility = getStrategyCompatibility(oldType: oldType, newType: newType)
-        
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: compatibility.icon)
-                .foregroundStyle(compatibility.color)
-                .font(.caption)
-            
-            Text(compatibility.message)
-                .font(.caption)
-                .foregroundStyle(compatibility.color)
-        }
-        .padding(.vertical, 4)
-    }
-    
-    // 判断策略兼容性
-    private func getStrategyCompatibility(oldType: OptionType, newType: OptionType) -> (icon: String, color: Color, message: String) {
-        // 相同策略
-        if oldType == newType {
-            return ("checkmark.circle.fill", .green, "Rolling to the same strategy type")
-        }
-        
-        // Call <-> Put 转换
-        if oldType.isCall && newType.isPut {
-            return ("exclamationmark.triangle.fill", .orange, "⚠️ Switching from Call to Put - Make sure you understand the implications")
-        }
-        if oldType.isPut && newType.isCall {
-            return ("exclamationmark.triangle.fill", .orange, "⚠️ Switching from Put to Call - Make sure you understand the implications")
-        }
-        
-        // Covered <-> Naked 转换
-        if oldType == .coveredCall && newType == .nakedCall {
-            return ("exclamationmark.triangle.fill", .orange, "⚠️ Switching to Naked Call - Higher risk, requires margin")
-        }
-        if oldType == .nakedCall && newType == .coveredCall {
-            return ("info.circle.fill", .blue, "ℹ️ Switching to Covered Call - Need to own stock first")
-        }
-        if oldType == .cashSecuredPut && newType == .nakedPut {
-            return ("exclamationmark.triangle.fill", .orange, "⚠️ Switching to Naked Put - Higher risk, requires margin")
-        }
-        if oldType == .nakedPut && newType == .cashSecuredPut {
-            return ("checkmark.circle.fill", .green, "✅ Switching to Cash-Secured Put - Lower risk")
-        }
-        
-        return ("info.circle.fill", .blue, "Rolling to a different strategy type")
-    }
-    
-    // 检查是否可以显示 Diagram
-    private func canShowDiagram() -> Bool {
-        guard let strategy = selectedStrategy,
-              let _ = Double(newStrike),
-              let _ = Double(newPremium) else {
-            return false
-        }
-        
-        // 如果选择了 closed，必须有 closePrice
-        if oldLegEndMode == .closed {
-            guard let _ = Double(closePrice) else {
-                return false
-            }
-        }
-        
-        // 如果是 Naked Call/Put 被行权，必须有 marketPriceAtExercise
-        if oldLegEndMode == .exercised && strategy.optionType.isNaked {
-            guard let _ = Double(marketPriceAtExercise) else {
-                return false
-            }
-        }
-        
-        return true
-    }
-    
-    private func formatPrice(_ price: Double) -> String {
-        String(format: "$%.2f", price)
-    }
-}
-
-
-
-// MARK: - Strategy Picker View
-struct StrategyPickerView: View {
-    @Environment(\.dismiss) private var dismiss
-    let strategies: [OptionStrategy]
-    @Binding var selectedStrategy: OptionStrategy?
-    
-    var body: some View {
-        NavigationStack {
-            List {
-                if strategies.isEmpty {
-                    ContentUnavailableView(
-                        "No Strategies",
-                        systemImage: "chart.line.uptrend.xyaxis",
-                        description: Text("Add some option strategies first")
-                    )
-                } else {
-                    ForEach(strategies) { strategy in
-                        Button {
-                            selectedStrategy = strategy
-                            dismiss()
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(strategy.symbol)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
+                                if let calc = calculator {
+                                    Divider()
                                     
                                     HStack {
-                                        Text(strategy.optionType.displayName)
-                                        Text("•")
-                                        Text(formatPrice(strategy.strikePrice))
-                                        Text("•")
-                                        Text(formattedDate(strategy.expirationDate))
+                                        Text("Realized P/L from Closing:")
+                                            .fontWeight(.medium)
+                                        Spacer()
+                                        Text("$\(String(format: "%.2f", calc.closeProfitLoss))")
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(calc.closeProfitLoss >= 0 ? .green : .red)
                                     }
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                }
-                                
-                                Spacer()
-                                
-                                if let selected = selectedStrategy,
-                                   selected.id == strategy.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.blue)
+                                    .font(.callout)
                                 }
                             }
                         }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                    }
+                    
+                    // 新仓位信息
+                    if selectedOldStrategy != nil {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("New Position", systemImage: "2.circle.fill")
+                                .font(.headline)
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                RollInputRow(
+                                    title: "New Strike Price",
+                                    description: "Strike price for the new position",
+                                    value: $newStrikePrice
+                                )
+                                
+                                RollInputRow(
+                                    title: "New Premium",
+                                    description: "Premium to receive per share for new position",
+                                    value: $newPremium
+                                )
+                                
+                                if let calc = calculator {
+                                    Divider()
+                                    
+                                    HStack {
+                                        Text("New Contracts:")
+                                            .fontWeight(.medium)
+                                        Spacer()
+                                        Text("\(calc.newContracts)")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .font(.callout)
+                                    
+                                    // 根据策略类型显示不同的字段
+                                    switch calc.oldStrategy.optionType {
+                                    case .nakedCall, .nakedPut:
+                                        // Naked Call/Put: 显示提示信息
+                                        HStack {
+                                            Text("New Margin Cost:")
+                                                .fontWeight(.medium)
+                                            Spacer()
+                                            Text("Check with broker")
+                                                .foregroundStyle(.secondary)
+                                                .font(.caption)
+                                        }
+                                        .font(.callout)
+                                    case .cashSecuredPut:
+                                        // Cash-Secured Put: 显示 New Cost Basis per Share
+                                        HStack {
+                                            Text("New Cost Basis per Share:")
+                                                .fontWeight(.medium)
+                                            Spacer()
+                                            Text("$\(String(format: "%.2f", calc.newCostBasis))")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .font(.callout)
+                                    case .coveredCall:
+                                        // Covered Call: 显示 New Cost Basis per Share
+                                        HStack {
+                                            Text("New Cost Basis per Share:")
+                                                .fontWeight(.medium)
+                                            Spacer()
+                                            Text("$\(String(format: "%.2f", calc.newCostBasis))")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .font(.callout)
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
                     }
                 }
+                .padding(.horizontal)
+                
+                // Payoff Diagram
+                if let calc = calculator {
+                    VStack(spacing: 16) {
+                        RollPayoffChartView(calculator: calc, selectedPrice: $selectedPrice, selectedProfit: $selectedProfit)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        
+                        // Selected Price Info Card
+                        if let price = selectedPrice, let profit = selectedProfit {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Selected Price")
+                                    .font(.headline)
+                                
+                                Divider()
+                                
+                                HStack {
+                                    Text("Stock Price:")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("$\(String(format: "%.2f", price))")
+                                        .font(.subheadline.weight(.medium))
+                                }
+                                
+                                HStack {
+                                    Text("P/L:")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("$\(String(format: "%.2f", profit))")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(profit >= 0 ? .green : .red)
+                                }
+                            }
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        }
+                        
+                        // Key Metrics Card
+                        let metrics = calc.calculateMetrics()
+                        
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Key Metrics")
+                                .font(.headline)
+                            
+                            Divider()
+                            
+                            RollKeyPointRow(
+                                label: "Max Profit",
+                                value: metrics.maxProfit,
+                                color: .green
+                            )
+                            
+                            Divider()
+                            
+                            // Max Loss - 对于 naked call 显示特殊文本
+                            if metrics.isMaxLossUnlimited {
+                                HStack {
+                                    Circle()
+                                        .fill(Color.red)
+                                        .frame(width: 8, height: 8)
+                                    Text("Max Loss")
+                                    Spacer()
+                                    Text("Theoretically Uncapped")
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.red)
+                                }
+                            } else {
+                                RollKeyPointRow(
+                                    label: "Max Loss",
+                                    value: metrics.maxLoss,
+                                    color: .red
+                                )
+                            }
+                            
+                            Divider()
+                            
+                            if let breakEven = metrics.breakEvenPrice {
+                                RollKeyPointRow(
+                                    label: "Break-Even Point",
+                                    value: breakEven,
+                                    color: .blue
+                                )
+                            } else {
+                                HStack {
+                                    Circle()
+                                        .fill(Color.orange)
+                                        .frame(width: 8, height: 8)
+                                    Text("Break-Even Point")
+                                    Spacer()
+                                    Text("N/A")
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                    }
+                    .padding(.horizontal)
+                }
             }
-            .navigationTitle("Select Strategy")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
+            .padding(.vertical)
+        }
+        .navigationTitle("Roll Calculator")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selectedPrice) { oldValue, newValue in
+            if let price = newValue, let calc = calculator {
+                let data = calc.generatePayoffData()
+                let closestPoint = data.min { point1, point2 in
+                    abs(point1.stockPrice - price) < abs(point2.stockPrice - price)
+                }
+                selectedProfit = closestPoint?.profitLoss
+            } else {
+                selectedProfit = nil
+            }
+        }
+    }
+}
+
+// MARK: - Strategy Detail Row
+struct StrategyDetailRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.caption.weight(.medium))
+        }
+    }
+}
+
+// MARK: - Input Row Component
+struct RollInputRow: View {
+    let title: String
+    let description: String
+    @Binding var value: Double
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Spacer()
+                TextField(title, value: $value, format: .number.precision(.fractionLength(2)))
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 120)
+            }
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Key Point Row
+struct RollKeyPointRow: View {
+    let label: String
+    let value: Double
+    let color: Color
+    
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(label)
+            Spacer()
+            Text("$\(String(format: "%.2f", value))")
+                .fontWeight(.medium)
+                .foregroundStyle(color)
+        }
+    }
+}
+
+// MARK: - Payoff Chart View
+struct RollPayoffChartView: View {
+    let calculator: RollCalculator
+    @Binding var selectedPrice: Double?
+    @Binding var selectedProfit: Double?
+    
+    var body: some View {
+        let data = calculator.generatePayoffData()
+        let xRange = calculator.chartXRange
+        
+        // 过滤数据点，只显示范围内的
+        let filteredData = xRange.map { range in
+            data.filter { range.contains($0.stockPrice) }
+        } ?? data
+        
+        // 找到选中价格对应的数据点
+        let selectedPoint: RollPayoffDataPoint? = {
+            guard let price = selectedPrice else { return nil }
+            return filteredData.min { point1, point2 in
+                abs(point1.stockPrice - price) < abs(point2.stockPrice - price)
+            }
+        }()
+        
+        Chart {
+            // Payoff curve - 简化，只用线条
+            ForEach(filteredData) { point in
+                LineMark(
+                    x: .value("Stock Price", point.stockPrice),
+                    y: .value("P/L", point.profitLoss)
+                )
+                .foregroundStyle(.primary)
+                .lineStyle(StrokeStyle(lineWidth: 2))
+            }
+            
+            // Zero line
+            RuleMark(y: .value("Zero", 0))
+                .foregroundStyle(.secondary.opacity(0.3))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            
+            // 选中点的标记
+            if let selectedPoint = selectedPoint {
+                // 垂直线标记选中的价格
+                RuleMark(x: .value("Selected Price", selectedPoint.stockPrice))
+                    .foregroundStyle(.blue.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                
+                // 选中的点
+                PointMark(
+                    x: .value("Stock Price", selectedPoint.stockPrice),
+                    y: .value("P/L", selectedPoint.profitLoss)
+                )
+                .foregroundStyle(.blue)
+                .symbolSize(120)
+            }
+        }
+        .chartXSelection(value: $selectedPrice)
+        .chartXScale(domain: xRange ?? 0...100)
+        .chartXAxis {
+            AxisMarks(position: .bottom) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                AxisValueLabel {
+                    if let price = value.as(Double.self) {
+                        Text("$\(Int(price))")
+                            .font(.caption2)
                     }
                 }
             }
         }
-    }
-    
-    private func formatPrice(_ price: Double) -> String {
-        String(format: "$%.2f", price)
-    }
-    
-    private func formattedDate(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .omitted)
+        .chartYAxis {
+            AxisMarks(position: .leading) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                AxisValueLabel {
+                    if let pl = value.as(Double.self) {
+                        Text("$\(Int(pl))")
+                            .font(.caption2)
+                    }
+                }
+            }
+        }
+        .frame(height: 300)
     }
 }
 
-// MARK: - Old RollCalculator (Deprecated - kept for reference)
-/*
+// MARK: - Roll Calculator Model
+
 struct RollCalculator {
-    let strategy: OptionStrategy
-    let currentPrice: Double
-    let newStrike: Double
+    let oldStrategy: OptionStrategy
+    let closePrice: Double  // 平仓价（买入平仓的成本 per share）
+    let contractsToRoll: Int  // 要 roll 的合约数量
+    let newStrikePrice: Double
     let newPremium: Double
     
-    // ... old implementation ...
+    /// 新仓位的合约数量（与要 roll 的合约数量相同）
+    var newContracts: Int {
+        contractsToRoll
+    }
+    
+    /// Calculate P/L from closing the old position
+    /// 滚仓只是平仓，不涉及行权，所以只计算期权部分的盈亏
+    /// 只计算要 roll 的合约数量的盈亏
+    var closeProfitLoss: Double {
+        let quantity = Double(contractsToRoll) * 100  // 只计算要 roll 的合约数量
+        let originalPremium = oldStrategy.optionPrice * quantity  // 收到的权利金（按比例）
+        let closeCost = closePrice * quantity  // 平仓成本（按比例）
+        
+        // 所有策略类型：平仓 P/L = 收到的权利金 - 平仓成本
+        // Covered Call: 股票还在，不计算股票盈亏
+        // Cash-Secured Put/Naked: 没有股票，只计算期权盈亏
+        return originalPremium - closeCost
+    }
+    
+    /// New position cost basis
+    var newCostBasis: Double {
+        switch oldStrategy.optionType {
+        case .coveredCall:
+            // Covered Call: 股票还在，继承原 cost basis
+            return oldStrategy.averagePricePerShare
+            
+        case .cashSecuredPut:
+            // Cash-Secured Put: 如果被行权，会以 strike price 买入股票
+            // 所以 cost basis 应该是新的 strike price
+            return newStrikePrice
+            
+        case .nakedCall, .nakedPut:
+            // 这些策略类型在平仓后没有股票
+            // 但 PayoffCalculator 需要 cost basis，对于 naked call，cost basis 概念上不适用，但计算时需要
+            // 对于 naked put，使用原值（虽然不会被行权，但 PayoffCalculator 可能需要）
+            return oldStrategy.averagePricePerShare
+        }
+    }
+    
+    /// Calculate new position P/L at a given stock price
+    func calculateNewProfitLoss(at stockPrice: Double) -> Double {
+        // 使用 PayoffCalculator 计算新仓位的 payoff
+        // 新仓位使用相同的策略类型
+        let tempStrategy = OptionStrategy(
+            symbol: oldStrategy.symbol,
+            optionType: oldStrategy.optionType,  // 保持相同的策略类型
+            expirationDate: Date(),
+            strikePrice: newStrikePrice,
+            optionPrice: newPremium,
+            averagePricePerShare: newCostBasis,
+            contracts: newContracts
+        )
+        
+        return PayoffCalculator.calculateSingleLegPayoff(strategy: tempStrategy, at: stockPrice)
+    }
+    
+    /// Generate payoff data points
+    func generatePayoffData() -> [RollPayoffDataPoint] {
+        // 生成价格范围
+        let strikes = [oldStrategy.strikePrice, newStrikePrice]
+        let minStrike = strikes.min() ?? 0
+        let maxStrike = strikes.max() ?? 100
+        
+        let rangeWidth = maxStrike - minStrike
+        let buffer = max(rangeWidth * 0.2, minStrike * 0.2)
+        
+        let minPrice = max(0, minStrike - buffer)
+        let maxPrice = maxStrike + buffer
+        let step = (maxPrice - minPrice) / 100
+        
+        var points: [RollPayoffDataPoint] = []
+        
+        for i in 0...100 {
+            let stockPrice = minPrice + Double(i) * step
+            
+            // 计算新仓位在这个价格下的 P/L
+            let newPL = calculateNewProfitLoss(at: stockPrice)
+            
+            // 总 P/L = 平仓实现的 P/L + 新仓位在到期时的 P/L
+            let totalPL = closeProfitLoss + newPL
+            
+            points.append(RollPayoffDataPoint(stockPrice: stockPrice, profitLoss: totalPL))
+        }
+        
+        return points
+    }
+    
+    /// Calculate key metrics
+    func calculateMetrics() -> RollMetrics {
+        let data = generatePayoffData()
+        
+        // Max profit
+        let maxProfit = data.map { $0.profitLoss }.max() ?? 0
+        
+        // Max loss - 需要考虑边界情况
+        var maxLoss = data.map { $0.profitLoss }.min() ?? 0
+        var isMaxLossUnlimited = false
+        
+        // 根据策略类型检查边界情况
+        switch oldStrategy.optionType {
+        case .nakedCall:
+            // Naked Call: 当股价无限上涨时，损失无限大
+            // 检查在更高价格时的损失（比如当前最大价格的 10 倍）
+            if let maxPrice = data.map({ $0.stockPrice }).max(), maxPrice > 0 {
+                let extremePrice = maxPrice * 10
+                let extremePL = closeProfitLoss + calculateNewProfitLoss(at: extremePrice)
+                maxLoss = min(maxLoss, extremePL)
+            }
+            // Naked Call 的损失理论上无限（股价可以无限上涨）
+            isMaxLossUnlimited = true
+            
+        case .nakedPut, .cashSecuredPut:
+            // Naked Put / Cash-Secured Put: 当股价为 0 时，损失最大
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
+            
+        case .coveredCall:
+            // Covered Call: 当股价为 0 时，损失最大（股票价值为 0）
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
+        }
+        
+        // Break-even point
+        var breakEvenPrice: Double? = nil
+        for i in 0..<(data.count - 1) {
+            let current = data[i]
+            let next = data[i + 1]
+            
+            if (current.profitLoss < 0 && next.profitLoss > 0) || (current.profitLoss > 0 && next.profitLoss < 0) {
+                let profitDiff = next.profitLoss - current.profitLoss
+                if abs(profitDiff) > 0.001 {
+                    let ratio = -current.profitLoss / profitDiff
+                    let priceDiff = next.stockPrice - current.stockPrice
+                    breakEvenPrice = current.stockPrice + ratio * priceDiff
+                    break
+                }
+            } else if abs(current.profitLoss) < 0.01 {
+                breakEvenPrice = current.stockPrice
+                break
+            }
+        }
+        
+        return RollMetrics(
+            maxProfit: maxProfit,
+            maxLoss: maxLoss,
+            isMaxLossUnlimited: isMaxLossUnlimited,
+            breakEvenPrice: breakEvenPrice
+        )
+    }
+    
+    /// Key point annotations
+    var keyPoints: [RollPayoffAnnotation] {
+        let metrics = calculateMetrics()
+        var annotations: [RollPayoffAnnotation] = []
+        
+        // Break-even point
+        if let breakEven = metrics.breakEvenPrice, breakEven > 0 {
+            let plAtBreakEven = closeProfitLoss + calculateNewProfitLoss(at: breakEven)
+            annotations.append(RollPayoffAnnotation(
+                stockPrice: breakEven,
+                profitLoss: plAtBreakEven,
+                label: "Break-Even",
+                color: .blue,
+                showLabel: true
+            ))
+        }
+        
+        // Max profit point - 找到最大利润对应的价格
+        let data = generatePayoffData()
+        if let maxProfitPoint = data.max(by: { $0.profitLoss < $1.profitLoss }) {
+            annotations.append(RollPayoffAnnotation(
+                stockPrice: maxProfitPoint.stockPrice,
+                profitLoss: maxProfitPoint.profitLoss,
+                label: "Max Profit",
+                color: .green,
+                showLabel: true
+            ))
+        }
+        
+        return annotations
+    }
+    
+    /// Calculate X axis range based on actual data range
+    var chartXRange: ClosedRange<Double>? {
+        let data = generatePayoffData()
+        
+        // 基于实际数据范围，确保线条能填满整个图表
+        guard let minDataPrice = data.map({ $0.stockPrice }).min(),
+              let maxDataPrice = data.map({ $0.stockPrice }).max() else {
+            return nil
+        }
+        
+        // 使用实际数据范围，左右各留一点缓冲
+        let range = maxDataPrice - minDataPrice
+        let buffer = max(range * 0.005, minDataPrice * 0.005)  // 0.5% 缓冲
+        
+        let chartMin = max(0, minDataPrice - buffer)
+        let chartMax = maxDataPrice + buffer
+        
+        return chartMin...chartMax
+    }
 }
-*/
 
+// MARK: - Roll Metrics
+struct RollMetrics {
+    let maxProfit: Double
+    let maxLoss: Double
+    let isMaxLossUnlimited: Bool  // 对于 naked call，损失理论上无限
+    let breakEvenPrice: Double?
+}
+
+// MARK: - Chart Data Models (Roll-specific)
+struct RollPayoffDataPoint: Identifiable {
+    let id = UUID()
+    let stockPrice: Double
+    let profitLoss: Double
+}
+
+struct RollPayoffAnnotation: Identifiable {
+    let id = UUID()
+    let stockPrice: Double
+    let profitLoss: Double
+    let label: String
+    let color: Color
+    let showLabel: Bool
+}
+
+// MARK: - Preview Helper View
+private struct PreviewWithSamples: View {
+    @State private var container: ModelContainer?
+    
+    var body: some View {
+        Group {
+            if let container = container {
+                NavigationStack {
+                    RollCalculatorView()
+                        .modelContainer(container)
+                }
+            } else {
+                ProgressView()
+                    .task {
+                        await setupContainer()
+                    }
+            }
+        }
+    }
+    
+    @MainActor
+    private func setupContainer() async {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let newContainer = try! ModelContainer(for: OptionStrategy.self, configurations: config)
+        
+        // 添加示例数据 - 每个策略类型各一个
+        let sampleStrategies = [
+            // Covered Call
+            OptionStrategy(
+                symbol: "AAPL",
+                optionType: .coveredCall,
+                expirationDate: Calendar.current.date(byAdding: .day, value: 30, to: Date()) ?? Date(),
+                strikePrice: 180,
+                optionPrice: 5.5,
+                averagePricePerShare: 175,
+                contracts: 2
+            ),
+            // Naked Call
+            OptionStrategy(
+                symbol: "NVDA",
+                optionType: .nakedCall,
+                expirationDate: Calendar.current.date(byAdding: .day, value: 14, to: Date()) ?? Date(),
+                strikePrice: 500,
+                optionPrice: 15.0,
+                averagePricePerShare: 480,
+                contracts: 1
+            ),
+            // Cash-Secured Put
+            OptionStrategy(
+                symbol: "TSLA",
+                optionType: .cashSecuredPut,
+                expirationDate: Calendar.current.date(byAdding: .day, value: 21, to: Date()) ?? Date(),
+                strikePrice: 250,
+                optionPrice: 8.5,
+                averagePricePerShare: 260,
+                contracts: 3
+            ),
+            // Naked Put
+            OptionStrategy(
+                symbol: "SPY",
+                optionType: .nakedPut,
+                expirationDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date(),
+                strikePrice: 450,
+                optionPrice: 12.0,
+                averagePricePerShare: 460,
+                contracts: 2
+            )
+        ]
+        
+        // 将示例数据插入到 container
+        sampleStrategies.forEach { strategy in
+            newContainer.mainContext.insert(strategy)
+        }
+        
+        container = newContainer
+    }
+}
+
+// MARK: - Preview
 #Preview {
-    RollCalculatorView()
-        .modelContainer(for: OptionStrategy.self, inMemory: true)
+    PreviewWithSamples()
 }
