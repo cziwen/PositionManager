@@ -11,7 +11,7 @@ import SwiftData
 @main
 struct OptionViewApp: App {
     // 数据模型版本号 - 当模型结构改变时，增加这个版本号以触发数据库重建
-    // 设置为 1 以清理包含旧格式数据（如 "Put"）的数据库
+    // 设置为 # 以清理包含旧格式数据的数据库
     private static let currentDataVersion = 1
     
     var sharedModelContainer: ModelContainer = {
