@@ -16,7 +16,7 @@ struct PayoffDiagramExamples {
     static func ironCondor() -> [OptionStrategy] {
         let symbol = "AAPL"
         let expirationDate = Calendar.current.date(byAdding: .day, value: 30, to: Date())!
-        let currentPrice = 175.0  // 当前股价，仅作参考
+//        let currentPrice = 175.0  // 当前股价，仅作参考
         
         return [
             // 卖出 OTM Call（Naked Call 不需要持股成本）
@@ -47,7 +47,7 @@ struct PayoffDiagramExamples {
     static func shortStrangle() -> [OptionStrategy] {
         let symbol = "TSLA"
         let expirationDate = Calendar.current.date(byAdding: .day, value: 45, to: Date())!
-        let currentPrice = 250.0  // 当前股价，仅作参考
+//        let currentPrice = 250.0  // 当前股价，仅作参考
         
         return [
             // 卖出 Call（Naked Call 不需要持股成本）
@@ -99,7 +99,7 @@ struct PayoffDiagramExamples {
     static func cashSecuredPut() -> [OptionStrategy] {
         let symbol = "NVDA"
         let expirationDate = Calendar.current.date(byAdding: .day, value: 30, to: Date())!
-        let currentPrice = 500.0  // 当前股价，仅作参考
+//        let currentPrice = 500.0  // 当前股价，仅作参考
         
         return [
             // 卖出 Cash-Secured Put（准备以 $480 买入）
@@ -152,7 +152,7 @@ struct PayoffDiagramExamples {
         let symbol = "SPY"
         let expiration1 = Calendar.current.date(byAdding: .day, value: 30, to: Date())!
         let expiration2 = Calendar.current.date(byAdding: .day, value: 60, to: Date())!
-        let currentPrice = 450.0  // 当前股价，仅作参考
+//        let currentPrice = 450.0  // 当前股价，仅作参考
         
         return [
             // 近期 Call（Naked Call）

@@ -11,13 +11,13 @@ import SwiftData
 @Model
 final class OptionStrategy {
     var symbol: String // 股票代码
-    var optionType: OptionType // 期权类型
+    @Attribute(.externalStorage) var optionType: OptionType // 期权类型
     var expirationDate: Date // 执行日
     var strikePrice: Double // 执行价
     var optionPrice: Double // 期权价格
     var averagePricePerShare: Double // 每股均价
     var contracts: Int // 合同数
-    var exerciseStatus: ExerciseStatus // 是否行权
+    @Attribute(.externalStorage) var exerciseStatus: ExerciseStatus // 是否行权
     var marginCost: Double? // 保证金成本（仅用于 Naked Call/Put）
     var exerciseMarketPrice: Double? // 行权时的市场价格（仅用于 Naked Call/Put 被行权）
     var currentMarketPrice: Double? // 当前市场价格（用于未行权时计算未实现盈亏）

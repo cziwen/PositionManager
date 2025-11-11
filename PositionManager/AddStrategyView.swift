@@ -175,6 +175,30 @@ struct AddStrategyView: View {
             }
             .navigationTitle(isEditMode ? "Edit Strategy" : "Add Strategy")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // 键盘工具栏 - 显示 Done 按钮
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        // 关闭键盘
+                        focusedField = nil
+                    }
+                }
+                
+                // 导航栏工具栏
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saveStrategy()
+                    }
+                    .disabled(!isFormValid)
+                }
+            }
             .task {
                 // 使用 task 替代 onAppear，确保在视图准备好后加载数据
                 loadStrategyData()
@@ -187,20 +211,6 @@ struct AddStrategyView: View {
                 // 当切换到非 Naked 策略时，清空保证金字段
                 if newValue != .nakedCall && newValue != .nakedPut {
                     marginCost = ""
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        saveStrategy()
-                    }
-                    .disabled(!isFormValid)
                 }
             }
         }

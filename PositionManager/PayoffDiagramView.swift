@@ -149,40 +149,66 @@ struct PayoffDiagramView: View {
     @State private var selectedProfit: Double?
     @State private var showingLegends = true
     
-    private var payoffData: (legs: [LegPayoff], total: TotalPayoff) {
-        PayoffCalculator.calculatePayoffData(for: strategies)
+    // 缓存数据，避免每次视图更新都重新计算
+    @State private var cachedPayoffData: (legs: [LegPayoff], total: TotalPayoff)?
+    @State private var cachedChartMinY: Double?
+    @State private var cachedChartMaxY: Double?
+    @State private var cachedChartMinX: Double?
+    @State private var cachedChartMaxX: Double?
+    @State private var cachedMetrics: (maxProfit: Double, maxLoss: Double, isMaxLossUnlimited: Bool, breakEvenPoints: [Double])?
+    @State private var strategiesHash: Int = 0
+    
+    // 计算策略列表的哈希值，用于检测变化
+    private func hashStrategies() -> Int {
+        var hasher = Hasher()
+        for strategy in strategies {
+            hasher.combine(strategy.id)
+            hasher.combine(strategy.strikePrice)
+            hasher.combine(strategy.optionPrice)
+            hasher.combine(strategy.contracts)
+            hasher.combine(strategy.averagePricePerShare)
+        }
+        return hasher.finalize()
     }
     
-    // 获取当前悬停位置的详细数据
+    // 只使用缓存的数据，不进行任何计算
+    private var payoffData: (legs: [LegPayoff], total: TotalPayoff)? {
+        cachedPayoffData
+    }
+    
+    // 从缓存数据中获取当前悬停位置的详细数据
     private var selectedLegProfits: [(name: String, profit: Double)] {
-        guard let price = selectedPrice else { return [] }
+        guard let price = selectedPrice,
+              let data = cachedPayoffData else {
+            return []
+        }
         
-        return payoffData.legs.map { leg in
-            let profit = PayoffCalculator.calculateSingleLegPayoff(strategy: leg.strategy, at: price)
-            return (leg.displayName, profit)
+        // 从缓存的数据中查找最接近的价格点
+        return data.legs.map { leg in
+            // 找到最接近的价格点
+            let closestPoint = leg.points.min { point1, point2 in
+                abs(point1.underlyingPrice - price) < abs(point2.underlyingPrice - price)
+            }
+            let profit = closestPoint?.profit ?? 0
+            let displayName = "\(leg.strategy.optionType.displayName) @ $\(String(format: "%.2f", leg.strategy.strikePrice))"
+            return (displayName, profit)
         }
     }
     
     private var chartMinY: Double {
-        let allProfits = payoffData.total.points.map { $0.profit }
-        let minProfit = allProfits.min() ?? 0
-        // 上下各留 20% 空间
-        return minProfit - abs(minProfit) * 0.2
+        cachedChartMinY ?? 0
     }
     
     private var chartMaxY: Double {
-        let allProfits = payoffData.total.points.map { $0.profit }
-        let maxProfit = allProfits.max() ?? 0
-        // 上下各留 20% 空间
-        return maxProfit + abs(maxProfit) * 0.2
+        cachedChartMaxY ?? 100
     }
     
     private var chartMinX: Double {
-        payoffData.total.points.map { $0.underlyingPrice }.min() ?? 0
+        cachedChartMinX ?? 0
     }
     
     private var chartMaxX: Double {
-        payoffData.total.points.map { $0.underlyingPrice }.max() ?? 100
+        cachedChartMaxX ?? 100
     }
     
     var body: some View {
@@ -202,80 +228,118 @@ struct PayoffDiagramView: View {
                 
                 // 图表卡片
                 VStack(spacing: 16) {
-                    // 图表
-                    Chart {
-                        // 零线参考
-                        RuleMark(y: .value("Break-even", 0))
-                            .foregroundStyle(.gray.opacity(0.3))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
-                        
-                        // 各单腿（虚线）
-                        if showingLegends {
-                            ForEach(payoffData.legs) { leg in
-                                ForEach(leg.points) { point in
-                                    LineMark(
-                                        x: .value("Price", point.underlyingPrice),
-                                        y: .value("Profit", point.profit)
-                                    )
-                                    .foregroundStyle(by: .value("Leg", leg.displayName))
-                                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                    // 图表 - 只在有缓存数据时显示
+                    if let data = payoffData {
+                        Chart {
+                            // 零线参考
+                            RuleMark(y: .value("Zero", 0))
+                                .foregroundStyle(.secondary.opacity(0.3))
+                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                            
+                            // 各单腿（虚线）
+                            if showingLegends {
+                                ForEach(data.legs) { leg in
+                                    ForEach(leg.points) { point in
+                                        LineMark(
+                                            x: .value("Price", point.underlyingPrice),
+                                            y: .value("Profit", point.profit)
+                                        )
+                                        .foregroundStyle(by: .value("Leg", leg.displayName))
+                                        .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                                    }
+                                }
+                            }
+                            
+                            // 总盈亏（实线）
+                            ForEach(data.total.points) { point in
+                                LineMark(
+                                    x: .value("Price", point.underlyingPrice),
+                                    y: .value("Profit", point.profit)
+                                )
+                                .foregroundStyle(.primary)
+                                .lineStyle(StrokeStyle(lineWidth: 2))
+                            }
+                            
+                            // 选中点的标记
+                            if let price = selectedPrice, let profit = selectedProfit {
+                                // 垂直线标记选中的价格
+                                RuleMark(x: .value("Selected Price", price))
+                                    .foregroundStyle(.blue.opacity(0.5))
+                                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                                
+                                // 选中的点
+                                PointMark(
+                                    x: .value("Stock Price", price),
+                                    y: .value("P/L", profit)
+                                )
+                                .foregroundStyle(.blue)
+                                .symbolSize(120)
+                            }
+                        }
+                        .chartXScale(domain: chartMinX...chartMaxX)
+                        .chartYScale(domain: chartMinY...chartMaxY)
+                        .chartXSelection(value: $selectedPrice)
+                        .chartXAxis {
+                        AxisMarks(position: .bottom) { value in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                            AxisValueLabel {
+                                if let price = value.as(Double.self) {
+                                    // 如果是整数，不显示小数；否则显示一位小数
+                                    let formattedPrice = abs(price - Double(Int(price))) < 0.0001
+                                        ? "$\(Int(price))"
+                                        : "$\(String(format: "%.1f", price))"
+                                    Text(formattedPrice)
+                                        .font(.caption2)
                                 }
                             }
                         }
-                        
-                        // 总盈亏（实线）
-                        ForEach(payoffData.total.points) { point in
-                            LineMark(
-                                x: .value("Price", point.underlyingPrice),
-                                y: .value("Profit", point.profit)
-                            )
-                            .foregroundStyle(by: .value("Leg", "Total P&L"))
-                            .lineStyle(StrokeStyle(lineWidth: 3))
-                        }
-                        
-                        // 选中点的垂直线
-                        if let price = selectedPrice {
-                            RuleMark(x: .value("Selected Price", price))
-                                .foregroundStyle(.blue.opacity(0.5))
-                                .lineStyle(StrokeStyle(lineWidth: 2))
-                                .annotation(position: .top) {
-                                    VStack(spacing: 4) {
-                                        Text("$\(String(format: "%.2f", price))")
-                                            .font(.caption.bold())
-                                            .foregroundStyle(.white)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(.blue)
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) { value in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                            AxisValueLabel {
+                                if let pl = value.as(Double.self) {
+                                    Text("$\(Int(pl))")
+                                        .font(.caption2)
                                 }
+                            }
                         }
                     }
-                    .chartXScale(domain: chartMinX...chartMaxX)  // 固定 X 轴范围
-                    .chartYScale(domain: chartMinY...chartMaxY)  // 固定 Y 轴范围
-                    .chartXAxisLabel("Underlying Price")
-                    .chartYAxisLabel("Profit / Loss")
-                    .chartLegend(position: .bottom, spacing: 8)
-                    .frame(height: 400)
-                    .chartXSelection(value: $selectedPrice)
-                    .padding()
-                    .background(Color(.systemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
-                    
-                    // 显示/隐藏单腿按钮
-                    Button {
-                        withAnimation {
-                            showingLegends.toggle()
+                        .frame(height: 300)
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        
+                        // 显示/隐藏单腿按钮
+                        Button {
+                            withAnimation {
+                                showingLegends.toggle()
+                            }
+                        } label: {
+                            Label(
+                                showingLegends ? "Hide Individual Legs" : "Show Individual Legs",
+                                systemImage: showingLegends ? "eye.slash" : "eye"
+                            )
+                            .font(.subheadline.weight(.medium))
                         }
-                    } label: {
-                        Label(
-                            showingLegends ? "Hide Individual Legs" : "Show Individual Legs",
-                            systemImage: showingLegends ? "eye.slash" : "eye"
-                        )
-                        .font(.subheadline.weight(.medium))
+                        .buttonStyle(.bordered)
+                    } else {
+                        // 数据未准备好时显示占位符
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text("Calculating chart data...")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(height: 300)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
                     }
-                    .buttonStyle(.bordered)
                 }
                 .padding(.horizontal)
                 
@@ -329,14 +393,60 @@ struct PayoffDiagramView: View {
             .padding(.vertical)
         }
         .onChange(of: selectedPrice) { oldValue, newValue in
-            if let price = newValue {
-                // 找到最接近的点
-                let closestPoint = payoffData.total.points.min { point1, point2 in
+            // 从缓存数据中查找总盈亏，避免重新计算
+            if let price = newValue, let data = cachedPayoffData {
+                // 从总盈亏数据中查找最接近的价格点
+                let closestPoint = data.total.points.min { point1, point2 in
                     abs(point1.underlyingPrice - price) < abs(point2.underlyingPrice - price)
                 }
                 selectedProfit = closestPoint?.profit
             } else {
                 selectedProfit = nil
+            }
+        }
+        .task(id: hashStrategies()) {
+            // 当策略列表变化时，更新缓存
+            let newPayoffData = PayoffCalculator.calculatePayoffData(for: strategies)
+            let allProfits = newPayoffData.total.points.map { $0.profit }
+            let minProfit = allProfits.min() ?? 0
+            let maxProfit = allProfits.max() ?? 0
+            let range = maxProfit - minProfit
+            let bufferY = max(abs(range) * 0.4, abs(minProfit) * 0.4)
+            let newChartMinY = minProfit - bufferY
+            let newChartMaxY = maxProfit + bufferY
+            let newChartMinX = newPayoffData.total.points.map { $0.underlyingPrice }.min() ?? 0
+            let newChartMaxX = newPayoffData.total.points.map { $0.underlyingPrice }.max() ?? 100
+            let newMetrics = PayoffMetricsCalculator.calculateMetrics(for: strategies)
+            
+            await MainActor.run {
+                cachedPayoffData = newPayoffData
+                cachedChartMinY = newChartMinY
+                cachedChartMaxY = newChartMaxY
+                cachedChartMinX = newChartMinX
+                cachedChartMaxX = newChartMaxX
+                cachedMetrics = (newMetrics.maxProfit, newMetrics.maxLoss, newMetrics.isMaxLossUnlimited, newMetrics.breakEvenPoints)
+                strategiesHash = hashStrategies()
+            }
+        }
+        .onAppear {
+            // 首次出现时，如果缓存为空，立即计算（同步，避免闪烁）
+            if cachedPayoffData == nil {
+                let newPayoffData = PayoffCalculator.calculatePayoffData(for: strategies)
+                let allProfits = newPayoffData.total.points.map { $0.profit }
+                let minProfit = allProfits.min() ?? 0
+                let maxProfit = allProfits.max() ?? 0
+                let range = maxProfit - minProfit
+                let bufferY = max(abs(range) * 0.4, abs(minProfit) * 0.4)
+                cachedPayoffData = newPayoffData
+                cachedChartMinY = minProfit - bufferY
+                cachedChartMaxY = maxProfit + bufferY
+                cachedChartMinX = newPayoffData.total.points.map { $0.underlyingPrice }.min() ?? 0
+                cachedChartMaxX = newPayoffData.total.points.map { $0.underlyingPrice }.max() ?? 100
+                cachedMetrics = {
+                    let metrics = PayoffMetricsCalculator.calculateMetrics(for: strategies)
+                    return (metrics.maxProfit, metrics.maxLoss, metrics.isMaxLossUnlimited, metrics.breakEvenPoints)
+                }()
+                strategiesHash = hashStrategies()
             }
         }
     }
@@ -389,14 +499,45 @@ struct PayoffDiagramView: View {
             Text("Key Metrics")
                 .font(.headline)
             
-            let maxProfit = payoffData.total.points.map { $0.profit }.max() ?? 0
-            let maxLoss = payoffData.total.points.map { $0.profit }.min() ?? 0
-            let breakEvenPoints = findBreakEvenPoints()
+            // 只使用缓存的 metrics，不进行任何计算
+            if let metrics = cachedMetrics {
+                let maxProfit = metrics.maxProfit
+                let maxLoss = metrics.maxLoss
+                let isMaxLossUnlimited = metrics.isMaxLossUnlimited
+                let breakEvenPoints = metrics.breakEvenPoints
             
             VStack(spacing: 12) {
-                MetricRow(title: "Max Profit", value: formatPrice(maxProfit), color: .green)
+                if maxProfit.isInfinite {
+                    HStack {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text("Max Profit")
+                        Spacer()
+                        Text("Unlimited")
+                            .fontWeight(.medium)
+                            .foregroundStyle(.green)
+                    }
+                } else {
+                    MetricRow(title: "Max Profit", value: formatPriceWithSign(maxProfit), color: .green)
+                }
                 Divider()
-                MetricRow(title: "Max Loss", value: formatPrice(maxLoss), color: .red)
+                
+                // Max Loss - 对于 naked call 显示特殊文本
+                if isMaxLossUnlimited {
+                    HStack {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 8, height: 8)
+                        Text("Max Loss")
+                        Spacer()
+                        Text("Theoretically Uncapped")
+                            .fontWeight(.medium)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    MetricRow(title: "Max Loss", value: formatPriceWithSign(maxLoss), color: .red)
+                }
                 Divider()
                 
                 HStack {
@@ -421,6 +562,15 @@ struct PayoffDiagramView: View {
                     }
                 }
             }
+            } else {
+                // Metrics 未准备好
+                VStack(spacing: 12) {
+                    Text("Metrics will appear when chart data is ready")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
         }
         .padding()
         .background(Color(.systemBackground))
@@ -430,77 +580,16 @@ struct PayoffDiagramView: View {
     
     // MARK: - Helper Methods
     
-    /// Calculate max profit from the payoff curve
-    private func calculateMaxProfit() -> (value: Double, isUnlimited: Bool) {
-        let hasNakedCall = strategies.contains { $0.optionType == .nakedCall }
-        
-        if hasNakedCall && strategies.count == 1 {
-            return (0, true)  // Unlimited profit potential for naked call
-        }
-        
-        let maxProfit = payoffData.total.points.map { $0.profit }.max() ?? 0
-        return (maxProfit, false)
-    }
-    
-    /// Calculate max loss from the payoff curve
-    private func calculateMaxLoss() -> (value: Double, isUnlimited: Bool) {
-        // Check if any strategy has unlimited risk
-        let hasNakedCall = strategies.contains { $0.optionType == .nakedCall }
-        
-        // For combinations with naked calls, check if it's truly unlimited
-        if hasNakedCall {
-            // If it's a pure naked call position, unlimited risk
-            if strategies.count == 1 && strategies[0].optionType == .nakedCall {
-                return (0, true)
-            }
-            // For spreads or combinations, calculate actual max loss from curve
-        }
-        
-        // For all other cases, use the minimum value from the payoff curve
-        let minProfit = payoffData.total.points.map { $0.profit }.min() ?? 0
-        return (minProfit, false)
-    }
-    
-    /// Find break-even points where profit crosses zero
-    private func findBreakEvenPoints() -> [Double] {
-        var breakEvenPoints: [Double] = []
-        let points = payoffData.total.points
-        
-        guard points.count >= 2 else { return [] }
-        
-        for i in 0..<(points.count - 1) {
-            let current = points[i]
-            let next = points[i + 1]
-            
-            // Check if profit crosses zero between these two points
-            if (current.profit < 0 && next.profit > 0) || (current.profit > 0 && next.profit < 0) {
-                // Use linear interpolation to find exact break-even point
-                let profitDiff = next.profit - current.profit
-                if abs(profitDiff) > 0.001 {  // Avoid division by very small numbers
-                    let ratio = -current.profit / profitDiff
-                    let priceDiff = next.underlyingPrice - current.underlyingPrice
-                    let breakEven = current.underlyingPrice + ratio * priceDiff
-                    breakEvenPoints.append(breakEven)
-                }
-            } else if abs(current.profit) < 0.01 {
-                // If very close to zero, treat as break-even
-                breakEvenPoints.append(current.underlyingPrice)
-            }
-        }
-        
-        // Remove duplicates (break-even points within $0.50 of each other)
-        var uniquePoints: [Double] = []
-        for point in breakEvenPoints.sorted() {
-            if uniquePoints.isEmpty || abs(point - uniquePoints.last!) > 0.5 {
-                uniquePoints.append(point)
-            }
-        }
-        
-        return uniquePoints
-    }
-    
     private func formatPrice(_ price: Double) -> String {
         String(format: "$%.2f", price)
+    }
+    
+    private func formatPriceWithSign(_ price: Double) -> String {
+        if price >= 0 {
+            return String(format: "+$%.2f", price)
+        } else {
+            return String(format: "$%.2f", price)
+        }
     }
 }
 

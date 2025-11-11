@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import Charts
+import UIKit
 
 // MARK: - Roll Calculator View
 struct RollCalculatorView: View {
@@ -23,6 +24,12 @@ struct RollCalculatorView: View {
     
     @State private var selectedPrice: Double?
     @State private var selectedProfit: Double?
+    
+    // 缓存计算好的图表数据
+    @State private var cachedPayoffData: [RollPayoffDataPoint]?
+    @State private var cachedXRange: ClosedRange<Double>?
+    @State private var cachedMetrics: RollMetrics?
+    @State private var isCalculating = false
     
     private var calculator: RollCalculator? {
         guard let oldStrategy = selectedOldStrategy,
@@ -45,6 +52,55 @@ struct RollCalculatorView: View {
     
     private var strategies: [OptionStrategy] {
         allStrategies
+    }
+    
+    // 异步计算图表数据
+    private func calculatePayoffData() {
+        guard let calc = calculator else {
+            // 如果参数无效，清空缓存
+            cachedPayoffData = nil
+            cachedXRange = nil
+            cachedMetrics = nil
+            isCalculating = false
+            return
+        }
+        
+        // 如果正在计算，不重复计算
+        guard !isCalculating else { return }
+        
+        isCalculating = true
+        
+        Task.detached(priority: .userInitiated) {
+            // 在后台线程计算数据
+            let newData = calc.generatePayoffData()
+            
+            // 从数据中计算 X 轴范围，避免重复调用 generatePayoffData()
+            let newXRange: ClosedRange<Double>? = {
+                guard let minDataPrice = newData.map({ $0.stockPrice }).min(),
+                      let maxDataPrice = newData.map({ $0.stockPrice }).max() else {
+                    return nil
+                }
+                
+                // 使用实际数据范围，左右各留一点缓冲
+                let range = maxDataPrice - minDataPrice
+                let buffer = max(range * 0.005, minDataPrice * 0.005)  // 0.5% 缓冲
+                
+                let chartMin = max(0, minDataPrice - buffer)
+                let chartMax = maxDataPrice + buffer
+                
+                return chartMin...chartMax
+            }()
+            
+            // 计算 metrics（使用已生成的数据，避免重复计算）
+            let newMetrics = calc.calculateMetrics(from: newData)
+            
+            await MainActor.run {
+                cachedPayoffData = newData
+                cachedXRange = newXRange
+                cachedMetrics = newMetrics
+                isCalculating = false
+            }
+        }
     }
     
     var body: some View {
@@ -254,11 +310,51 @@ struct RollCalculatorView: View {
                 // Payoff Diagram
                 if let calc = calculator {
                     VStack(spacing: 16) {
-                        RollPayoffChartView(calculator: calc, selectedPrice: $selectedPrice, selectedProfit: $selectedProfit)
+                        // 显示图表或加载状态
+                        if let data = cachedPayoffData, let xRange = cachedXRange {
+                            RollPayoffChartView(
+                                data: data,
+                                xRange: xRange,
+                                selectedPrice: $selectedPrice,
+                                selectedProfit: $selectedProfit
+                            )
                             .padding()
                             .background(Color(.systemBackground))
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        } else if isCalculating {
+                            // 加载状态
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("Calculating chart data...")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(height: 300)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        } else {
+                            // 数据未准备好（参数可能无效）
+                            VStack(spacing: 12) {
+                                Image(systemName: "chart.line.uptrend.xyaxis")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(.secondary)
+                                Text("Chart will appear when all parameters are entered")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(height: 300)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                        }
                         
                         // Selected Price Info Card
                         if let price = selectedPrice, let profit = selectedProfit {
@@ -294,67 +390,67 @@ struct RollCalculatorView: View {
                         }
                         
                         // Key Metrics Card
-                        let metrics = calc.calculateMetrics()
-                        
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Key Metrics")
-                                .font(.headline)
-                            
-                            Divider()
-                            
-                            RollKeyPointRow(
-                                label: "Max Profit",
-                                value: metrics.maxProfit,
-                                color: .green
-                            )
-                            
-                            Divider()
-                            
-                            // Max Loss - 对于 naked call 显示特殊文本
-                            if metrics.isMaxLossUnlimited {
-                                HStack {
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 8, height: 8)
-                                    Text("Max Loss")
-                                    Spacer()
-                                    Text("Theoretically Uncapped")
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(.red)
-                                }
-                            } else {
+                        if let metrics = cachedMetrics {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Key Metrics")
+                                    .font(.headline)
+                                
+                                Divider()
+                                
                                 RollKeyPointRow(
-                                    label: "Max Loss",
-                                    value: metrics.maxLoss,
-                                    color: .red
+                                    label: "Max Profit",
+                                    value: metrics.maxProfit,
+                                    color: .green
                                 )
-                            }
-                            
-                            Divider()
-                            
-                            if let breakEven = metrics.breakEvenPrice {
-                                RollKeyPointRow(
-                                    label: "Break-Even Point",
-                                    value: breakEven,
-                                    color: .blue
-                                )
-                            } else {
-                                HStack {
-                                    Circle()
-                                        .fill(Color.orange)
-                                        .frame(width: 8, height: 8)
-                                    Text("Break-Even Point")
-                                    Spacer()
-                                    Text("N/A")
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(.orange)
+                                
+                                Divider()
+                                
+                                // Max Loss - 对于 naked call 显示特殊文本
+                                if metrics.isMaxLossUnlimited {
+                                    HStack {
+                                        Circle()
+                                            .fill(Color.red)
+                                            .frame(width: 8, height: 8)
+                                        Text("Max Loss")
+                                        Spacer()
+                                        Text("Theoretically Uncapped")
+                                            .fontWeight(.medium)
+                                            .foregroundStyle(.red)
+                                    }
+                                } else {
+                                    RollKeyPointRow(
+                                        label: "Max Loss",
+                                        value: metrics.maxLoss,
+                                        color: .red
+                                    )
+                                }
+                                
+                                Divider()
+                                
+                                if let breakEven = metrics.breakEvenPrice {
+                                    RollKeyPointRow(
+                                        label: "Break-Even Point",
+                                        value: breakEven,
+                                        color: .blue
+                                    )
+                                } else {
+                                    HStack {
+                                        Circle()
+                                            .fill(Color.orange)
+                                            .frame(width: 8, height: 8)
+                                        Text("Break-Even Point")
+                                        Spacer()
+                                        Text("N/A")
+                                            .fontWeight(.medium)
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
                             }
+                            .padding()
+                            .background(Color(.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
                         }
-                        .padding()
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
                     }
                     .padding(.horizontal)
                 }
@@ -363,16 +459,43 @@ struct RollCalculatorView: View {
         }
         .navigationTitle("Roll Calculator")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: selectedPrice) { oldValue, newValue in
-            if let price = newValue, let calc = calculator {
-                let data = calc.generatePayoffData()
-                let closestPoint = data.min { point1, point2 in
-                    abs(point1.stockPrice - price) < abs(point2.stockPrice - price)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    // 关闭键盘
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 }
-                selectedProfit = closestPoint?.profitLoss
+            }
+        }
+        .onChange(of: selectedOldStrategy) { _, _ in
+            calculatePayoffData()
+        }
+        .onChange(of: closePrice) { _, _ in
+            calculatePayoffData()
+        }
+        .onChange(of: contractsToRoll) { _, _ in
+            calculatePayoffData()
+        }
+        .onChange(of: newStrikePrice) { _, _ in
+            calculatePayoffData()
+        }
+        .onChange(of: newPremium) { _, _ in
+            calculatePayoffData()
+        }
+        .onChange(of: selectedPrice) { oldValue, newValue in
+            // 直接计算该价格点的盈亏，避免重新生成所有数据点
+            if let price = newValue, let calc = calculator {
+                let newPL = calc.calculateNewProfitLoss(at: price)
+                let totalPL = calc.closeProfitLoss + newPL
+                selectedProfit = totalPL
             } else {
                 selectedProfit = nil
             }
+        }
+        .onAppear {
+            // 首次出现时计算数据
+            calculatePayoffData()
         }
     }
 }
@@ -399,6 +522,35 @@ struct RollInputRow: View {
     let title: String
     let description: String
     @Binding var value: Double
+    @State private var textValue: String = ""
+    @FocusState private var isFocused: Bool
+    var onCommit: (() -> Void)? = nil
+    
+    // 初始化文本值的辅助函数
+    private func updateTextValue() {
+        if value == 0 {
+            textValue = ""
+        } else {
+            textValue = String(format: "%.2f", value)
+        }
+    }
+    
+    // 完成编辑并关闭键盘
+    private func commitEditing() {
+        // 将文本转换为 Double
+        if let doubleValue = Double(textValue) {
+            value = doubleValue
+        } else if textValue.isEmpty {
+            value = 0.0
+            textValue = ""
+        } else {
+            // 如果输入无效，恢复原值
+            updateTextValue()
+        }
+        // 关闭键盘
+        isFocused = false
+        onCommit?()
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -406,11 +558,40 @@ struct RollInputRow: View {
                 Text(title)
                     .font(.headline)
                 Spacer()
-                TextField(title, value: $value, format: .number.precision(.fractionLength(2)))
+                TextField("0.00", text: $textValue)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 120)
+                    .focused($isFocused)
+                    .onAppear {
+                        updateTextValue()
+                    }
+                    .onChange(of: isFocused) { oldValue, newValue in
+                        if newValue {
+                            // 用户开始编辑时，如果值为 0，清空输入框
+                            if value == 0 {
+                                textValue = ""
+                            }
+                        } else {
+                            // 用户完成编辑时，将文本转换为 Double（避免循环）
+                            if !textValue.isEmpty {
+                                if let doubleValue = Double(textValue) {
+                                    value = doubleValue
+                                } else {
+                                    updateTextValue()
+                                }
+                            } else {
+                                value = 0.0
+                            }
+                        }
+                    }
+                    .onChange(of: value) { oldValue, newValue in
+                        // 当外部值改变时，更新文本（但不在编辑中时）
+                        if !isFocused && oldValue != newValue {
+                            updateTextValue()
+                        }
+                    }
             }
             Text(description)
                 .font(.caption)
@@ -441,30 +622,15 @@ struct RollKeyPointRow: View {
 
 // MARK: - Payoff Chart View
 struct RollPayoffChartView: View {
-    let calculator: RollCalculator
+    let data: [RollPayoffDataPoint]
+    let xRange: ClosedRange<Double>
     @Binding var selectedPrice: Double?
     @Binding var selectedProfit: Double?
     
     var body: some View {
-        let data = calculator.generatePayoffData()
-        let xRange = calculator.chartXRange
-        
-        // 过滤数据点，只显示范围内的
-        let filteredData = xRange.map { range in
-            data.filter { range.contains($0.stockPrice) }
-        } ?? data
-        
-        // 找到选中价格对应的数据点
-        let selectedPoint: RollPayoffDataPoint? = {
-            guard let price = selectedPrice else { return nil }
-            return filteredData.min { point1, point2 in
-                abs(point1.stockPrice - price) < abs(point2.stockPrice - price)
-            }
-        }()
-        
         Chart {
             // Payoff curve - 简化，只用线条
-            ForEach(filteredData) { point in
+            ForEach(data) { point in
                 LineMark(
                     x: .value("Stock Price", point.stockPrice),
                     y: .value("P/L", point.profitLoss)
@@ -478,30 +644,34 @@ struct RollPayoffChartView: View {
                 .foregroundStyle(.secondary.opacity(0.3))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             
-            // 选中点的标记
-            if let selectedPoint = selectedPoint {
+            // 选中点的标记 - 直接使用 selectedPrice 和 selectedProfit，避免查找数据点
+            if let price = selectedPrice, let profit = selectedProfit {
                 // 垂直线标记选中的价格
-                RuleMark(x: .value("Selected Price", selectedPoint.stockPrice))
+                RuleMark(x: .value("Selected Price", price))
                     .foregroundStyle(.blue.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
                 
                 // 选中的点
                 PointMark(
-                    x: .value("Stock Price", selectedPoint.stockPrice),
-                    y: .value("P/L", selectedPoint.profitLoss)
+                    x: .value("Stock Price", price),
+                    y: .value("P/L", profit)
                 )
                 .foregroundStyle(.blue)
                 .symbolSize(120)
             }
         }
         .chartXSelection(value: $selectedPrice)
-        .chartXScale(domain: xRange ?? 0...100)
+        .chartXScale(domain: xRange)
         .chartXAxis {
             AxisMarks(position: .bottom) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                 AxisValueLabel {
                     if let price = value.as(Double.self) {
-                        Text("$\(Int(price))")
+                        // 如果是整数，不显示小数；否则显示一位小数
+                        let formattedPrice = abs(price - Double(Int(price))) < 0.0001
+                            ? "$\(Int(price))"
+                            : "$\(String(format: "%.1f", price))"
+                        Text(formattedPrice)
                             .font(.caption2)
                     }
                 }
@@ -653,25 +823,58 @@ struct RollCalculator {
             maxLoss = min(maxLoss, plAtZero)
         }
         
-        // Break-even point
-        var breakEvenPrice: Double? = nil
-        for i in 0..<(data.count - 1) {
-            let current = data[i]
-            let next = data[i + 1]
-            
-            if (current.profitLoss < 0 && next.profitLoss > 0) || (current.profitLoss > 0 && next.profitLoss < 0) {
-                let profitDiff = next.profitLoss - current.profitLoss
-                if abs(profitDiff) > 0.001 {
-                    let ratio = -current.profitLoss / profitDiff
-                    let priceDiff = next.stockPrice - current.stockPrice
-                    breakEvenPrice = current.stockPrice + ratio * priceDiff
-                    break
-                }
-            } else if abs(current.profitLoss) < 0.01 {
-                breakEvenPrice = current.stockPrice
-                break
+        // Break-even point - 使用 PayoffMetricsCalculator 计算
+        let dataPoints = data.map { (price: $0.stockPrice, profitLoss: $0.profitLoss) }
+        let breakEvenPoints = PayoffMetricsCalculator.calculateBreakEvenPoints(from: dataPoints)
+        // RollCalculator 只返回第一个 break-even point（与原有逻辑保持一致）
+        let breakEvenPrice = breakEvenPoints.first
+        
+        return RollMetrics(
+            maxProfit: maxProfit,
+            maxLoss: maxLoss,
+            isMaxLossUnlimited: isMaxLossUnlimited,
+            breakEvenPrice: breakEvenPrice
+        )
+    }
+    
+    /// Calculate key metrics from pre-computed data (avoids regenerating data)
+    func calculateMetrics(from data: [RollPayoffDataPoint]) -> RollMetrics {
+        // Max profit
+        let maxProfit = data.map { $0.profitLoss }.max() ?? 0
+        
+        // Max loss - 需要考虑边界情况
+        var maxLoss = data.map { $0.profitLoss }.min() ?? 0
+        var isMaxLossUnlimited = false
+        
+        // 根据策略类型检查边界情况
+        switch oldStrategy.optionType {
+        case .nakedCall:
+            // Naked Call: 当股价无限上涨时，损失无限大
+            // 检查在更高价格时的损失（比如当前最大价格的 10 倍）
+            if let maxPrice = data.map({ $0.stockPrice }).max(), maxPrice > 0 {
+                let extremePrice = maxPrice * 10
+                let extremePL = closeProfitLoss + calculateNewProfitLoss(at: extremePrice)
+                maxLoss = min(maxLoss, extremePL)
             }
+            // Naked Call 的损失理论上无限（股价可以无限上涨）
+            isMaxLossUnlimited = true
+            
+        case .nakedPut, .cashSecuredPut:
+            // Naked Put / Cash-Secured Put: 当股价为 0 时，损失最大
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
+            
+        case .coveredCall:
+            // Covered Call: 当股价为 0 时，损失最大（股票价值为 0）
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
         }
+        
+        // Break-even point - 使用 PayoffMetricsCalculator 计算
+        let dataPoints = data.map { (price: $0.stockPrice, profitLoss: $0.profitLoss) }
+        let breakEvenPoints = PayoffMetricsCalculator.calculateBreakEvenPoints(from: dataPoints)
+        // RollCalculator 只返回第一个 break-even point（与原有逻辑保持一致）
+        let breakEvenPrice = breakEvenPoints.first
         
         return RollMetrics(
             maxProfit: maxProfit,

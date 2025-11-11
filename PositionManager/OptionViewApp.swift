@@ -10,6 +10,10 @@ import SwiftData
 
 @main
 struct OptionViewApp: App {
+    // 数据模型版本号 - 当模型结构改变时，增加这个版本号以触发数据库重建
+    // 设置为 1 以清理包含旧格式数据（如 "Put"）的数据库
+    private static let currentDataVersion = 1
+    
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -17,10 +21,90 @@ struct OptionViewApp: App {
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
+        // 检查数据版本
+        let savedVersion = UserDefaults.standard.integer(forKey: "DataModelVersion")
+        if savedVersion != Self.currentDataVersion {
+            // 版本不匹配，删除旧数据库
+            print("🔄 检测到数据模型版本变化 (\(savedVersion) -> \(Self.currentDataVersion))，清理旧数据库...")
+            
+            // 删除数据库文件
+            // SwiftData 数据库文件通常存储在 Application Support 目录
+            let fileManager = FileManager.default
+            if let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let storeURL = appSupportURL.appendingPathComponent("default.store")
+                let shmURL = appSupportURL.appendingPathComponent("default.store-shm")
+                let walURL = appSupportURL.appendingPathComponent("default.store-wal")
+                
+                try? fileManager.removeItem(at: storeURL)
+                try? fileManager.removeItem(at: shmURL)
+                try? fileManager.removeItem(at: walURL)
+                
+                print("✅ 已删除旧数据库文件")
+            }
+            
+            // 更新版本号
+            UserDefaults.standard.set(Self.currentDataVersion, forKey: "DataModelVersion")
+        }
+
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            
+            // 尝试读取数据以验证数据库是否正常
+            // 如果读取失败（比如有旧数据无法解码），会抛出错误
+            let context = container.mainContext
+            let descriptor = FetchDescriptor<OptionStrategy>()
+            do {
+                _ = try context.fetch(descriptor)
+            } catch {
+                // 读取失败，说明数据库中有不兼容的数据，需要清理
+                print("⚠️ 数据库读取失败（可能包含旧格式数据）: \(error)")
+                print("🔄 清理数据库...")
+                
+                let fileManager = FileManager.default
+                if let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    let storeURL = appSupportURL.appendingPathComponent("default.store")
+                    let shmURL = appSupportURL.appendingPathComponent("default.store-shm")
+                    let walURL = appSupportURL.appendingPathComponent("default.store-wal")
+                    
+                    try? fileManager.removeItem(at: storeURL)
+                    try? fileManager.removeItem(at: shmURL)
+                    try? fileManager.removeItem(at: walURL)
+                }
+                
+                // 更新版本号
+                UserDefaults.standard.set(Self.currentDataVersion, forKey: "DataModelVersion")
+                
+                // 重新创建容器
+                return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            }
+            
+            return container
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            // 如果创建失败，尝试删除数据库并重新创建
+            print("⚠️ 数据库初始化失败: \(error)")
+            print("🔄 尝试清理并重建数据库...")
+            
+            // 删除数据库文件
+            let fileManager = FileManager.default
+            if let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let storeURL = appSupportURL.appendingPathComponent("default.store")
+                let shmURL = appSupportURL.appendingPathComponent("default.store-shm")
+                let walURL = appSupportURL.appendingPathComponent("default.store-wal")
+                
+                try? fileManager.removeItem(at: storeURL)
+                try? fileManager.removeItem(at: shmURL)
+                try? fileManager.removeItem(at: walURL)
+            }
+            
+            // 更新版本号
+            UserDefaults.standard.set(Self.currentDataVersion, forKey: "DataModelVersion")
+            
+            // 重新创建
+            do {
+                return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            } catch {
+                fatalError("Could not create ModelContainer: \(error)")
+            }
         }
     }()
 
@@ -42,8 +126,17 @@ struct OptionViewApp: App {
         let context = sharedModelContainer.mainContext
         
         // 检查是否已经有数据
+        // 使用 try? 来避免因为旧数据格式导致的崩溃
         let fetchDescriptor = FetchDescriptor<OptionStrategy>()
-        let existingCount = (try? context.fetchCount(fetchDescriptor)) ?? 0
+        let existingCount: Int
+        do {
+            existingCount = try context.fetchCount(fetchDescriptor)
+        } catch {
+            // 如果读取失败（比如有旧格式数据），返回 0 让系统重新生成测试数据
+            print("⚠️ 读取数据失败（可能包含旧格式数据）: \(error)")
+            print("🔄 将重新生成测试数据...")
+            existingCount = 0
+        }
         
         // 如果已经有数据，就不添加测试数据
         if existingCount > 0 {

@@ -10,7 +10,8 @@ import SwiftData
 
 // MARK: - Portfolio Summary Model
 struct PortfolioSummary: Identifiable {
-    let id = UUID()
+    // 使用 symbol 作为稳定的 ID，避免每次重新计算时生成新的 UUID
+    var id: String { symbol }
     let symbol: String
     let totalInvestment: Double // 总投资（实际投入的资金/保证金）
     let finalSettlementCash: Double // 最终结算现金（包含保证金成本和盈亏）
@@ -18,7 +19,6 @@ struct PortfolioSummary: Identifiable {
     let profitLossPercentage: Double // 盈亏百分比
     let premium: Double // 期权总收入（权利金）
     let premiumPercentage: Double // 权利金占投资的百分比
-    let hasUnlimitedRisk: Bool // 是否有无限风险（Naked Call）
     let strategies: [OptionStrategy] // 该 symbol 的所有策略
     
     // 计算 Portfolio Diversity (占总投资组合的比例)
@@ -84,9 +84,6 @@ struct PortfolioView: View {
             let totalPremium = symbolStrategies.reduce(0.0) { sum, strategy in
                 sum + (strategy.optionPrice * Double(strategy.contracts) * 100)
             }
-            
-            // 检查是否有 Naked Call（无限风险）
-            let hasNakedCall = symbolStrategies.contains { $0.optionType == .nakedCall }
             
             // 计算 Final Settlement Cash 和 P/L
             // 注意：Final Settlement Cash 是按照您提供的公式计算的现金结算金额
@@ -173,21 +170,35 @@ struct PortfolioView: View {
                     
                     // Naked Call P/L 公式: P/L = N[P - max(0, S_T - K)]
                     // Final Settlement Cash = margin cost + P/L
-                    let marketPrice = strategy.exerciseStatus == .yes 
-                        ? strategy.exerciseMarketPrice 
-                        : strategy.currentMarketPrice
-                    
-                    if let price = marketPrice {
-                        let profitOrLoss = max(0, price - strategy.strikePrice)
-                        let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
-                        let finalCash = marginCost + profitLoss
-                        totalFinalSettlementCash += finalCash
-                        totalProfitLoss += profitLoss
-                    } else {
-                        // 没有价格，只计算权利金
-                        let finalCash = marginCost + premium
-                        totalFinalSettlementCash += finalCash
-                        totalProfitLoss += premium
+                    switch strategy.exerciseStatus {
+                    case .yes:
+                        // 被行权：使用行权时的市场价格
+                        if let price = strategy.exerciseMarketPrice {
+                            let profitOrLoss = max(0, price - strategy.strikePrice)
+                            let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
+                            let finalCash = marginCost + profitLoss
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += profitLoss
+                        }
+                        
+                    case .no:
+                        // 未行权：使用当前市场价格
+                        if let price = strategy.currentMarketPrice {
+                            let profitOrLoss = max(0, price - strategy.strikePrice)
+                            let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
+                            let finalCash = marginCost + profitLoss
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += profitLoss
+                        } else {
+                            // 没有价格，只计算权利金
+                            let finalCash = marginCost + premium
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += premium
+                        }
+                        
+                    case .unknown:
+                        // 未知状态：无法计算，跳过
+                        break
                     }
                     
                 case .nakedPut:
@@ -195,21 +206,35 @@ struct PortfolioView: View {
                     
                     // Naked Put P/L 公式: P/L = N[P - max(0, K - S_T)]
                     // Final Settlement Cash = margin cost + P/L
-                    let marketPrice = strategy.exerciseStatus == .yes 
-                        ? strategy.exerciseMarketPrice 
-                        : strategy.currentMarketPrice
-                    
-                    if let price = marketPrice {
-                        let profitOrLoss = max(0, strategy.strikePrice - price)
-                        let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
-                        let finalCash = marginCost + profitLoss
-                        totalFinalSettlementCash += finalCash
-                        totalProfitLoss += profitLoss
-                    } else {
-                        // 没有价格，只计算权利金
-                        let finalCash = marginCost + premium
-                        totalFinalSettlementCash += finalCash
-                        totalProfitLoss += premium
+                    switch strategy.exerciseStatus {
+                    case .yes:
+                        // 被行权：使用行权时的市场价格
+                        if let price = strategy.exerciseMarketPrice {
+                            let profitOrLoss = max(0, strategy.strikePrice - price)
+                            let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
+                            let finalCash = marginCost + profitLoss
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += profitLoss
+                        }
+                        
+                    case .no:
+                        // 未行权：使用当前市场价格
+                        if let price = strategy.currentMarketPrice {
+                            let profitOrLoss = max(0, strategy.strikePrice - price)
+                            let profitLoss = quantity * (strategy.optionPrice - profitOrLoss)
+                            let finalCash = marginCost + profitLoss
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += profitLoss
+                        } else {
+                            // 没有价格，只计算权利金
+                            let finalCash = marginCost + premium
+                            totalFinalSettlementCash += finalCash
+                            totalProfitLoss += premium
+                        }
+                        
+                    case .unknown:
+                        // 未知状态：无法计算，跳过
+                        break
                     }
                 }
             }
@@ -230,7 +255,6 @@ struct PortfolioView: View {
                 profitLossPercentage: profitLossPercentage,
                 premium: totalPremium,
                 premiumPercentage: premiumPercentage,
-                hasUnlimitedRisk: hasNakedCall,
                 strategies: symbolStrategies
             )
         }
@@ -471,10 +495,10 @@ struct PortfolioView: View {
             
             // 详细数据
             VStack(spacing: 12) {
-                HStack(spacing: 24) {
+                HStack(spacing: 12) {
                     VStack(spacing: 4) {
                         Text("Total Investment")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                         Text(formatPrice(totalInvestment))
                             .font(.subheadline.weight(.semibold))
@@ -486,7 +510,7 @@ struct PortfolioView: View {
                     
                     VStack(spacing: 4) {
                         Text("Final Settlement Cash")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                         Text(formatPrice(totalFinalSettlementCash))
                             .font(.subheadline.weight(.semibold))
@@ -498,7 +522,7 @@ struct PortfolioView: View {
                     
                     VStack(spacing: 4) {
                         Text("Positions")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                         Text("\(portfolioSummaries.count)")
                             .font(.subheadline.weight(.semibold))
@@ -676,12 +700,6 @@ struct PortfolioCard: View {
                                 .foregroundStyle(.blue)
                         }
                         .buttonStyle(.plain)
-                        
-                        // 无限风险警告
-                        if summary.hasUnlimitedRisk {
-                            Text("⚠️")
-                                .font(.title3)
-                        }
                     }
                     
                     Text("\(summary.strategies.count) \(summary.strategies.count == 1 ? "Strategy" : "Strategies")")
@@ -786,20 +804,6 @@ struct PortfolioDetailView: View {
                     Text("Profit / Loss")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    
-                    if summary.hasUnlimitedRisk {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text("Contains Unlimited Risk Strategy")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.orange.opacity(0.1))
-                        .clipShape(Capsule())
-                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
