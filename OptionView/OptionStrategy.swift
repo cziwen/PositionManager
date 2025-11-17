@@ -83,6 +83,8 @@ enum OptionType: String, Codable, CaseIterable {
     case nakedCall = "NakedCall"
     case cashSecuredPut = "CashSecuredPut"
     case nakedPut = "NakedPut"
+    case buyCall = "BuyCall"
+    case buyPut = "BuyPut"
     
     var displayName: String {
         switch self {
@@ -94,16 +96,20 @@ enum OptionType: String, Codable, CaseIterable {
             return "Sell Cash-Secured Put"
         case .nakedPut:
             return "Sell Naked Put"
+        case .buyCall:
+            return "Buy Call"
+        case .buyPut:
+            return "Buy Put"
         }
     }
     
     // 辅助属性：判断是 Call 还是 Put
     var isCall: Bool {
-        self == .coveredCall || self == .nakedCall
+        self == .coveredCall || self == .nakedCall || self == .buyCall
     }
     
     var isPut: Bool {
-        self == .cashSecuredPut || self == .nakedPut
+        self == .cashSecuredPut || self == .nakedPut || self == .buyPut
     }
     
     // 辅助属性：判断是否有担保

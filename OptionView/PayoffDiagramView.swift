@@ -83,6 +83,20 @@ class PayoffCalculator {
             // 盈亏：权利金 - max(执行价 - 当前价, 0) * 数量
             let intrinsicValue = max(strategy.strikePrice - underlyingPrice, 0)
             return premium - (intrinsicValue * quantity)
+            
+        case .buyCall:
+            // Buy Call: 买入看涨期权
+            // 支付权利金（成本），当股价 > 执行价时盈利 = (股价 - 执行价) × 数量 - 权利金成本
+            // P/L = max(0, S - K) × N - P × N
+            let intrinsicValue = max(underlyingPrice - strategy.strikePrice, 0)
+            return (intrinsicValue * quantity) - premium
+            
+        case .buyPut:
+            // Buy Put: 买入看跌期权
+            // 支付权利金（成本），当股价 < 执行价时盈利 = (执行价 - 股价) × 数量 - 权利金成本
+            // P/L = max(0, K - S) × N - P × N
+            let intrinsicValue = max(strategy.strikePrice - underlyingPrice, 0)
+            return (intrinsicValue * quantity) - premium
         }
     }
     
@@ -236,7 +250,7 @@ struct PayoffDiagramView: View {
                                 .foregroundStyle(.secondary.opacity(0.3))
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                             
-                            // 各单腿（虚线）
+                            // 各单腿（虚线）- 使用较淡的颜色避免与总盈亏冲突
                             if showingLegends {
                                 ForEach(data.legs) { leg in
                                     ForEach(leg.points) { point in
@@ -245,19 +259,20 @@ struct PayoffDiagramView: View {
                                             y: .value("Profit", point.profit)
                                         )
                                         .foregroundStyle(by: .value("Leg", leg.displayName))
+                                        .opacity(0.6)  // 降低透明度，使单腿更淡
                                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
                                     }
                                 }
                             }
                             
-                            // 总盈亏（实线）
+                            // 总盈亏（实线）- 使用明确的蓝色，避免与单腿颜色冲突
                             ForEach(data.total.points) { point in
                                 LineMark(
                                     x: .value("Price", point.underlyingPrice),
                                     y: .value("Profit", point.profit)
                                 )
-                                .foregroundStyle(.primary)
-                                .lineStyle(StrokeStyle(lineWidth: 2))
+                                .foregroundStyle(.blue)
+                                .lineStyle(StrokeStyle(lineWidth: 2.5))
                             }
                             
                             // 选中点的标记
@@ -276,6 +291,9 @@ struct PayoffDiagramView: View {
                                 .symbolSize(120)
                             }
                         }
+                        .chartForegroundStyleScale(range: [
+                            .green, .orange, .purple, .red, .pink, .teal, .indigo, .mint
+                        ])  // 为单腿指定颜色方案，排除蓝色
                         .chartXScale(domain: chartMinX...chartMaxX)
                         .chartYScale(domain: chartMinY...chartMaxY)
                         .chartXSelection(value: $selectedPrice)

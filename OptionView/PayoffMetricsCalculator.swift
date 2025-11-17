@@ -58,6 +58,22 @@ class PayoffMetricsCalculator {
             // Max Loss: P - K (when underlying price = 0)
             maxLoss = P - (K * quantity)
             isMaxLossUnlimited = false
+            
+        case .buyCall:
+            // Buy Call: 买入看涨期权
+            // Max Profit: 理论上无限（当股价无限上涨时）
+            maxProfit = Double.infinity
+            // Max Loss: 权利金成本（当期权到期无价值时）
+            maxLoss = -P  // 负数表示损失
+            isMaxLossUnlimited = false
+            
+        case .buyPut:
+            // Buy Put: 买入看跌期权
+            // Max Profit: (执行价 - 0) × 数量 - 权利金成本（当股价为 0 时）
+            maxProfit = (K * quantity) - P
+            // Max Loss: 权利金成本（当期权到期无价值时）
+            maxLoss = -P  // 负数表示损失
+            isMaxLossUnlimited = false
         }
         
         // Calculate break-even points by scanning

@@ -77,6 +77,10 @@ struct PortfolioView: View {
                 case .nakedCall, .nakedPut:
                     // Naked Call/Put: 使用保证金成本
                     return sum + strategy.getMarginCost()
+                    
+                case .buyCall, .buyPut:
+                    // Buy Call/Put: 权利金成本（投资）
+                    return sum + (strategy.optionPrice * Double(strategy.contracts) * 100)
                 }
             }
             
@@ -235,6 +239,38 @@ struct PortfolioView: View {
                     case .unknown:
                         // 未知状态：无法计算，跳过
                         break
+                    }
+                    
+                case .buyCall, .buyPut:
+                    // Buy Call/Put: 买入期权
+                    // 投资 = 权利金成本
+                    let investment = premium
+                    
+                    // 使用 PayoffCalculator 计算盈亏
+                    // 根据行权状态选择市场价格
+                    let marketPrice: Double?
+                    switch strategy.exerciseStatus {
+                    case .yes:
+                        // 被行权：使用行权时的市场价格（如果有）
+                        marketPrice = strategy.exerciseMarketPrice
+                    case .no, .unknown:
+                        // 未行权或未知：使用当前市场价格
+                        marketPrice = strategy.currentMarketPrice
+                    }
+                    
+                    if let price = marketPrice {
+                        // 有市场价格：计算实际盈亏
+                        let profitLoss = PayoffCalculator.calculateSingleLegPayoff(strategy: strategy, at: price)
+                        // Final Settlement Cash = 投资 + 盈亏
+                        let finalCash = investment + profitLoss
+                        totalFinalSettlementCash += finalCash
+                        totalProfitLoss += profitLoss
+                    } else {
+                        // 没有市场价格：假设期权到期无价值，损失全部权利金
+                        // Final Settlement Cash = 0（期权无价值）
+                        totalFinalSettlementCash += 0
+                        // P/L = -投资（损失全部权利金）
+                        totalProfitLoss += -investment
                     }
                 }
             }

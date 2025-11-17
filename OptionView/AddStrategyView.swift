@@ -231,6 +231,8 @@ struct AddStrategyView: View {
             return exerciseStatus == .yes  // Cash-Secured Put 被行权时需要市场价格
         case .nakedCall, .nakedPut:
             return exerciseStatus == .yes  // Naked 策略仅在被行权时需要输入
+        case .buyCall, .buyPut:
+            return exerciseStatus == .no || exerciseStatus == .unknown  // Buy Call/Put 未行权或未知时需要市场价格（可选）
         }
     }
     
@@ -243,6 +245,8 @@ struct AddStrategyView: View {
             return exerciseStatus == .yes  // Cash-Secured Put 被行权时必填
         case .nakedCall, .nakedPut:
             return exerciseStatus == .yes  // Naked 策略仅在被行权时必填
+        case .buyCall, .buyPut:
+            return false  // Buy Call/Put 市场价格是可选的
         }
     }
     
@@ -272,6 +276,12 @@ struct AddStrategyView: View {
                 return marketPriceAtExercise.isEmpty
                     ? "Required: Enter market price at exercise for P/L calculation"
                     : "Market price when put was exercised (for calculating actual loss)"
+            }
+        case .buyCall, .buyPut:
+            if exerciseStatus == .no || exerciseStatus == .unknown {
+                return marketPriceAtExercise.isEmpty
+                    ? "Optional: Enter current market price to calculate unrealized P/L"
+                    : "Current market price for calculating unrealized P/L"
             }
         }
         return ""
@@ -451,6 +461,11 @@ struct AddStrategyView: View {
                     exerciseMarketPriceValue = marketPrice
                 } else if exerciseStatus == .no {
                     // Naked 策略未行权：存储为 currentMarketPrice
+                    currentMarketPriceValue = marketPrice
+                }
+            case .buyCall, .buyPut:
+                if exerciseStatus == .no || exerciseStatus == .unknown {
+                    // Buy Call/Put 未行权或未知：存储为 currentMarketPrice（用于计算未实现盈亏）
                     currentMarketPriceValue = marketPrice
                 }
             }

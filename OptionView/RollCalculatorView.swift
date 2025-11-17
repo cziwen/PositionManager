@@ -51,7 +51,10 @@ struct RollCalculatorView: View {
     }
     
     private var strategies: [OptionStrategy] {
-        allStrategies
+        // Roll Calculator 只处理卖出策略，过滤掉 Buy Call 和 Buy Put
+        allStrategies.filter { strategy in
+            strategy.optionType != .buyCall && strategy.optionType != .buyPut
+        }
     }
     
     // 异步计算图表数据
@@ -168,6 +171,9 @@ struct RollCalculatorView: View {
                                     case .coveredCall:
                                         // Covered Call: 显示 Cost Basis per Share
                                         StrategyDetailRow(label: "Cost Basis per Share", value: "$\(String(format: "%.2f", strategy.averagePricePerShare))")
+                                    case .buyCall, .buyPut:
+                                        // Buy Call/Put: Roll Calculator 只处理卖出策略
+                                        EmptyView()
                                     }
                                     
                                     StrategyDetailRow(label: "Contracts", value: "\(strategy.contracts)")
@@ -295,6 +301,9 @@ struct RollCalculatorView: View {
                                                 .foregroundStyle(.secondary)
                                         }
                                         .font(.callout)
+                                    case .buyCall, .buyPut:
+                                        // Buy Call/Put: Roll Calculator 只处理卖出策略
+                                        EmptyView()
                                     }
                                 }
                             }
@@ -737,6 +746,11 @@ struct RollCalculator {
             // 但 PayoffCalculator 需要 cost basis，对于 naked call，cost basis 概念上不适用，但计算时需要
             // 对于 naked put，使用原值（虽然不会被行权，但 PayoffCalculator 可能需要）
             return oldStrategy.averagePricePerShare
+            
+        case .buyCall, .buyPut:
+            // Buy Call/Put: Roll Calculator 只处理卖出策略，这里不应该被调用
+            // 但为了编译通过，返回 0
+            return 0
         }
     }
     
@@ -821,6 +835,12 @@ struct RollCalculator {
             // Covered Call: 当股价为 0 时，损失最大（股票价值为 0）
             let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
             maxLoss = min(maxLoss, plAtZero)
+            
+        case .buyCall, .buyPut:
+            // Buy Call/Put: Roll Calculator 只处理卖出策略，这里不应该被调用
+            // 但为了编译通过，使用默认处理
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
         }
         
         // Break-even point - 使用 PayoffMetricsCalculator 计算
@@ -866,6 +886,12 @@ struct RollCalculator {
             
         case .coveredCall:
             // Covered Call: 当股价为 0 时，损失最大（股票价值为 0）
+            let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
+            maxLoss = min(maxLoss, plAtZero)
+            
+        case .buyCall, .buyPut:
+            // Buy Call/Put: Roll Calculator 只处理卖出策略，这里不应该被调用
+            // 但为了编译通过，使用默认处理
             let plAtZero = closeProfitLoss + calculateNewProfitLoss(at: 0)
             maxLoss = min(maxLoss, plAtZero)
         }
